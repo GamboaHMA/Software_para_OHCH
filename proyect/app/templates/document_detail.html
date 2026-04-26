@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+{% block title %}{{ document.title }} | Corpus documental{% endblock %}
+
+{% block content %}
+<div class="row g-4">
+  <div class="col-12">
+    <div class="d-flex justify-content-between align-items-start">
+      <div>
+        <h1 class="h3 mb-1">{{ document.title }}</h1>
+        <div class="text-muted">
+          {{ document.classification }} · {{ document.date }} · {{ document.author }}
+        </div>
+      </div>
+      <a href="/" class="btn btn-outline-secondary btn-sm">Volver</a>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-7">
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-semibold">PDF</div>
+      <div class="card-body p-0">
+        <iframe
+          src="{{ url_for('static', filename='pdfjs/web/viewer.html') }}?file={{ pdf_url }}"
+          style="width:100%; height:80vh; border:0;">
+        </iframe>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-12 col-xl-5">
+    <div class="card shadow-sm mb-4">
+      <div class="card-header bg-white fw-semibold">OCR</div>
+      <div class="card-body">
+        <div class="ocr-box">
+          Aquí irá el texto extraído por OCR del documento.
+        </div>
+      </div>
+    </div>
+
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-semibold">Metadatos</div>
+      <div class="card-body">
+        <dl class="row mb-0">
+          <dt class="col-sm-4">Título</dt>
+          <dd class="col-sm-8">{{ document.title }}</dd>
+
+          <dt class="col-sm-4">Clasificación</dt>
+          <dd class="col-sm-8">{{ document.classification }}</dd>
+
+          <dt class="col-sm-4">Fecha</dt>
+          <dd class="col-sm-8">{{ document.date }}</dd>
+
+          <dt class="col-sm-4">Autor</dt>
+          <dd class="col-sm-8">{{ document.author }}</dd>
+
+          <dt class="col-sm-4">Calidad OCR</dt>
+          <dd class="col-sm-8">{{ document.ocr_quality }}</dd>
+        </dl>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
