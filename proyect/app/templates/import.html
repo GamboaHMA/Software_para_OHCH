@@ -1,0 +1,141 @@
+{% extends "base.html" %}
+{% block title %}Importar documento | Corpus Documental{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-lg-9">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h1 class="h4 mb-0">Importar documento</h1>
+      <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">← Volver</a>
+    </div>
+
+    {% if result %}
+      <div class="alert alert-{{ 'success' if result.ok else 'danger' }} mb-4">
+        {{ result.message if result.ok else result.error }}
+        {% if result.ok %}
+          &nbsp;·&nbsp;
+          <a href="{{ url_for('main.document_detail', doc_id=result.doc_id) }}">Ver documento importado →</a>
+        {% endif %}
+      </div>
+    {% endif %}
+
+    {# ---- Formulario de importación individual ---- #}
+    <div class="card shadow-sm mb-4">
+      <div class="card-header fw-semibold bg-white">Documento individual</div>
+      <div class="card-body">
+        <form method="post" enctype="multipart/form-data" action="{{ url_for('main.import_view') }}">
+          <div class="row g-3">
+
+            <div class="col-md-4">
+              <label class="form-label">ID del documento <span class="text-danger">*</span></label>
+              <input type="text" name="doc_id" class="form-control" placeholder="DOC-0001" required>
+              <div class="form-text">Identificador único del documento.</div>
+            </div>
+            <div class="col-md-8">
+              <label class="form-label">Título <span class="text-danger">*</span></label>
+              <input type="text" name="title" class="form-control" placeholder="Título del documento" required>
+            </div>
+
+            <div class="col-md-8">
+              <label class="form-label">Archivo y fondo</label>
+              <input type="text" name="archive" class="form-control" placeholder="Archivo Histórico Nacional, sección Clero">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Signatura</label>
+              <input type="text" name="signature" class="form-control" placeholder="Caja 23, doc. 4">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Fecha original</label>
+              <input type="text" name="date_raw" class="form-control" placeholder="15/julio/1450">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label">Año</label>
+              <input type="number" name="date_year" class="form-control" placeholder="1450" min="800" max="1900">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Clasificación</label>
+              <input type="text" name="classification" class="form-control" placeholder="documento legal">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Autor</label>
+              <input type="text" name="author" class="form-control" placeholder="Anónimo">
+            </div>
+
+            <div class="col-md-3">
+              <label class="form-label">País</label>
+              <input type="text" name="location_country" class="form-control" value="España">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Región / Provincia</label>
+              <input type="text" name="location_region" class="form-control" placeholder="Castilla">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Ciudad</label>
+              <input type="text" name="location_city" class="form-control" placeholder="Toledo">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label">Lugar exacto</label>
+              <input type="text" name="location_place" class="form-control" placeholder="Catedral">
+            </div>
+
+            <div class="col-md-4">
+              <label class="form-label">Archivo PDF</label>
+              <input type="file" name="pdf_file" class="form-control" accept=".pdf">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Archivo OCR (.txt)</label>
+              <input type="file" name="ocr_file" class="form-control" accept=".txt">
+              <div class="form-text">O pegue el texto abajo.</div>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label">Calidad OCR (0–1)</label>
+              <input type="number" name="ocr_quality" class="form-control"
+                     step="0.01" min="0" max="1" placeholder="0.90">
+              <div class="form-text">Dejar vacío si se desconoce.</div>
+            </div>
+
+            <div class="col-12">
+              <label class="form-label">Texto OCR (si no adjunta .txt)</label>
+              <textarea name="ocr_text" class="form-control" rows="5"
+                        placeholder="Pegue aquí el texto extraído por OCR…"></textarea>
+            </div>
+
+            <div class="col-md-2">
+              <label class="form-label">Lengua</label>
+              <input type="text" name="language" class="form-control" value="español">
+            </div>
+            <div class="col-md-10">
+              <label class="form-label">Notas</label>
+              <input type="text" name="notes" class="form-control" placeholder="Observaciones sobre el documento o el proceso de digitalización">
+            </div>
+
+            <div class="col-12 pt-1">
+              <button type="submit" class="btn btn-primary">Importar documento</button>
+            </div>
+
+          </div>{# /row g-3 #}
+        </form>
+      </div>
+    </div>
+
+    {# ---- Info importación masiva ---- #}
+    <div class="card shadow-sm">
+      <div class="card-header fw-semibold bg-white">Importación masiva por CSV</div>
+      <div class="card-body text-muted small">
+        <p class="mb-2">Para importar múltiples documentos, use la función <code>import_from_csv()</code>
+          desde la consola de Flask o un script Python. El CSV debe tener las columnas:</p>
+        <pre class="bg-light p-2 rounded mb-2" style="font-size:0.78rem">doc_id, title, archive, signature, date_raw, date_year,
+location_country, location_region, location_city, location_place,
+classification, author, language, pdf_filename, ocr_quality, notes</pre>
+        <p class="mb-0">
+          Los PDFs deben estar en <code>data/pdfs/</code> y los archivos OCR en
+          <code>data/ocr/</code> con el mismo nombre que el PDF pero extensión <code>.txt</code>.
+        </p>
+      </div>
+    </div>
+
+  </div>
+</div>
+{% endblock %}

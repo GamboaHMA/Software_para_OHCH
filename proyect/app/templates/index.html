@@ -1,65 +1,164 @@
 {% extends "base.html" %}
-{% block title %}Inicio | Corpus documental{% endblock %}
+{% block title %}Documentos | Corpus Documental{% endblock %}
 
 {% block content %}
 <div class="row g-4">
+
+  {# ---- Barra de filtros ---- #}
   <div class="col-12">
     <div class="card shadow-sm">
-      <div class="card-body">
-        <div class="row g-3 align-items-end">
-          <div class="col-md-5">
-            <label class="form-label">Buscar</label>
-            <input type="text" class="form-control" placeholder="Título, autor o palabra OCR">
-          </div>
-          <div class="col-md-3">
-            <label class="form-label">Clasificación</label>
-            <select class="form-select">
-              <option value="">Todas</option>
-              <option>documento legal</option>
-              <option>correspondencia</option>
-              <option>documento gráfico</option>
-            </select>
-          </div>
-          <div class="col-md-2">
-            <label class="form-label">Fecha</label>
-            <input type="text" class="form-control" placeholder="1821">
-          </div>
-          <div class="col-md-2 d-grid">
-            <button class="btn btn-primary">Filtrar</button>
-          </div>
-        </div>
-      </div>
-    </div>
-  </div>
-
-  <div class="col-12">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h1 class="h4 mb-0">Documentos</h1>
-      <span class="text-muted small">{{ documents|length }} registros</span>
-    </div>
-
-    <div class="row g-3">
-      {% for doc in documents %}
-      <div class="col-12 col-lg-6 col-xl-4">
-        <div class="card shadow-sm h-100">
-          <div class="card-body d-flex flex-column">
-            <h5 class="card-title">{{ doc.title }}</h5>
-            <p class="card-text text-muted mb-2">{{ doc.classification }}</p>
-            <ul class="list-unstyled small mb-3">
-              <li><strong>Fecha:</strong> {{ doc.date }}</li>
-              <li><strong>Autor:</strong> {{ doc.author }}</li>
-              <li><strong>OCR:</strong> {{ doc.ocr_quality }}</li>
-            </ul>
-            <div class="mt-auto">
-              <a href="{{ url_for('main.document_detail', doc_id=doc.id) }}" class="btn btn-outline-primary btn-sm">
-                Ver documento
-              </a>
+      <div class="card-body py-3">
+        <form method="get" action="{{ url_for('main.index') }}">
+          <div class="row g-2 align-items-end">
+            <div class="col-12 col-md-4">
+              <label class="form-label form-label-sm">Búsqueda</label>
+              <input type="text" name="q" class="form-control form-control-sm"
+                     placeholder="Título, autor, ID o texto OCR" value="{{ search }}">
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label form-label-sm">Clasificación</label>
+              <select name="cls" class="form-select form-select-sm">
+                <option value="">Todas</option>
+                {% for cls in classifications %}
+                  <option value="{{ cls }}" {{ 'selected' if cls == current_cls }}>{{ cls }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-6 col-md-2">
+              <label class="form-label form-label-sm">Siglo</label>
+              <select name="c" class="form-select form-select-sm">
+                <option value="">Todos</option>
+                {% for c in centuries %}
+                  <option value="{{ c }}" {{ 'selected' if c == current_century }}>s. {{ c }}</option>
+                {% endfor %}
+              </select>
+            </div>
+            <div class="col-4 col-md-1">
+              <label class="form-label form-label-sm">Desde</label>
+              <input type="number" name="df" class="form-control form-control-sm"
+                     placeholder="1200" value="{{ date_from or '' }}">
+            </div>
+            <div class="col-4 col-md-1">
+              <label class="form-label form-label-sm">Hasta</label>
+              <input type="number" name="dt" class="form-control form-control-sm"
+                     placeholder="1800" value="{{ date_to or '' }}">
+            </div>
+            <div class="col-4 col-md-2 d-flex gap-1">
+              <button type="submit" class="btn btn-primary btn-sm flex-fill">Filtrar</button>
+              <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm" title="Limpiar filtros">✕</a>
             </div>
           </div>
-        </div>
+        </form>
       </div>
-      {% endfor %}
     </div>
   </div>
+
+  {# ---- Cabecera resultados ---- #}
+  <div class="col-12">
+    <div class="d-flex justify-content-between align-items-center">
+      <h1 class="h5 mb-0">
+        Documentos
+        <span class="text-muted fw-normal fs-6">— {{ pagination.total }} resultado{{ 's' if pagination.total != 1 else '' }}</span>
+      </h1>
+      <a href="{{ url_for('main.import_view') }}" class="btn btn-success btn-sm">+ Importar</a>
+    </div>
+  </div>
+
+  {# ---- Tabla de documentos ---- #}
+  {% if pagination.items %}
+  <div class="col-12">
+    <div class="table-responsive">
+      <table class="table table-hover table-sm align-middle">
+        <thead class="table-dark">
+          <tr>
+            <th>ID</th>
+            <th>Título / Autor</th>
+            <th>Clasificación</th>
+            <th>Fecha</th>
+            <th>Lugar</th>
+            <th>OCR</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for doc in pagination.items %}
+          <tr>
+            <td class="text-muted small text-nowrap">{{ doc.doc_id }}</td>
+            <td>
+              <a href="{{ url_for('main.document_detail', doc_id=doc.id) }}" class="text-decoration-none fw-medium">
+                {{ doc.title }}
+              </a>
+              {% if doc.author %}<div class="text-muted small">{{ doc.author }}</div>{% endif %}
+            </td>
+            <td>
+              {% if doc.classification %}
+                <span class="badge bg-secondary">{{ doc.classification }}</span>
+              {% else %}<span class="text-muted">—</span>{% endif %}
+            </td>
+            <td class="text-nowrap small">
+              {{ doc.date_raw or doc.date_year or '—' }}
+            </td>
+            <td class="small text-muted">
+              {{ doc.location_place or doc.location_city or doc.location_region or '—' }}
+            </td>
+            <td>
+              {% if doc.ocr_quality %}
+                {% set pct = (doc.ocr_quality * 100) | round | int %}
+                {% set cls = 'success' if pct >= 85 else ('warning' if pct >= 70 else 'danger') %}
+                <span class="text-{{ cls }} small">{{ pct }}%</span>
+              {% elif doc.ocr_text %}
+                <span class="text-secondary small">✓</span>
+              {% else %}
+                <span class="text-muted small">—</span>
+              {% endif %}
+            </td>
+            <td class="text-end">
+              <a href="{{ url_for('main.document_detail', doc_id=doc.id) }}" class="btn btn-outline-primary btn-sm">Ver</a>
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  {# ---- Paginación ---- #}
+  {% if pagination.pages > 1 %}
+  <div class="col-12">
+    <nav>
+      <ul class="pagination pagination-sm justify-content-center flex-wrap">
+        <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
+          <a class="page-link" href="{{ url_for('main.index', page=pagination.prev_num,
+             q=search, cls=current_cls, c=current_century, df=date_from, dt=date_to) }}">‹</a>
+        </li>
+        {% for p in pagination.iter_pages(left_edge=2, left_current=2, right_current=3, right_edge=2) %}
+          {% if p %}
+            <li class="page-item {{ 'active' if p == pagination.page }}">
+              <a class="page-link" href="{{ url_for('main.index', page=p,
+                 q=search, cls=current_cls, c=current_century, df=date_from, dt=date_to) }}">{{ p }}</a>
+            </li>
+          {% else %}
+            <li class="page-item disabled"><span class="page-link">…</span></li>
+          {% endif %}
+        {% endfor %}
+        <li class="page-item {{ 'disabled' if not pagination.has_next }}">
+          <a class="page-link" href="{{ url_for('main.index', page=pagination.next_num,
+             q=search, cls=current_cls, c=current_century, df=date_from, dt=date_to) }}">›</a>
+        </li>
+      </ul>
+    </nav>
+  </div>
+  {% endif %}
+
+  {% else %}
+  <div class="col-12">
+    <div class="text-center py-5 text-muted">
+      <div class="display-6 mb-3">📄</div>
+      <p class="mb-3">No se encontraron documentos con los filtros actuales.</p>
+      <a href="{{ url_for('main.import_view') }}" class="btn btn-primary">Importar documentos</a>
+    </div>
+  </div>
+  {% endif %}
+
 </div>
 {% endblock %}
