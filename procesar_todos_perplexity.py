@@ -550,6 +550,8 @@ def main():
             if dst_txt.exists():
                 stats["saltados"] += 1
                 continue
+                
+            print(f"saltados: {stats['saltados']}")
 
             dst_txt.parent.mkdir(parents=True, exist_ok=True)
             print(f"{prefix} [{idx}/{total_worker}] {rel}", flush=True)
