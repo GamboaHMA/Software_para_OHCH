@@ -23,6 +23,7 @@ Soluciones implementadas:
   - wait_for_human()         → detecta login/Cloudflare y pausa hasta resolución manual
 """
 
+import argparse
 import json
 import subprocess
 import time
@@ -66,7 +67,7 @@ RESPONSE_TIMEOUT    = 180
 # Segundos de pausa después de enviar antes de empezar a leer
 DELAY_AFTER_SUBMIT  = 3
 # Segundos de espera entre archivos (evita rate-limiting)
-DELAY_BETWEEN_FILES = 10
+DELAY_BETWEEN_FILES = 2
 # Número de verificaciones estables seguidas antes de declarar respuesta completa
 STABLE_POLLS_NEEDED = 4
 # Segundos entre cada sondeo de estabilidad
@@ -492,20 +493,55 @@ class PerplexityBot:
 # ── Bucle principal ───────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
+    parser = argparse.ArgumentParser(
+        description="Reconstrucción OCR en lote usando Perplexity.ai"
+    )
+    parser.add_argument(
+        "--worker",
+        type=int,
+        default=0,
+        metavar="N",
+        help="Índice de este worker (0-based). Ej: 0, 1, 2, 3",
+    )
+    parser.add_argument(
+        "--total-workers",
+        type=int,
+        default=1,
+        metavar="T",
+        help="Número total de workers en paralelo. Ej: 4",
+    )
+    args = parser.parse_args()
+
+    if args.worker >= args.total_workers:
+        raise ValueError(
+            f"--worker ({args.worker}) debe ser menor que --total-workers ({args.total_workers})"
+        )
+
     stats = {"procesados": 0, "saltados": 0, "errores": 0, "tiempo_total": 0.0}
 
     all_txt = sorted(INPUT_ROOT.rglob("*.txt"))
-    total = len(all_txt)
-    print(f"Archivos encontrados: {total}\n")
-    print("Abriendo navegador…", flush=True)
+
+    # Cada worker toma los archivos en posiciones: worker, worker+T, worker+2T, …
+    # Esto distribuye la carga uniformemente y elimina toda condición de carrera.
+    worker_txt = all_txt[args.worker :: args.total_workers]
+    total_global = len(all_txt)
+    total_worker = len(worker_txt)
+
+    prefix = f"[W{args.worker}]" if args.total_workers > 1 else ""
+    print(
+        f"{prefix} Archivos totales: {total_global} | "
+        f"Asignados a este worker: {total_worker}\n",
+        flush=True,
+    )
+    print(f"{prefix} Abriendo navegador…", flush=True)
 
     bot = PerplexityBot(headless=False)
     bot.start()
     bot.open_home()
-    print("Navegador listo. Iniciando procesamiento…\n", flush=True)
+    print(f"{prefix} Navegador listo. Iniciando procesamiento…\n", flush=True)
 
     try:
-        for idx, src_path in enumerate(all_txt, 1):
+        for idx, src_path in enumerate(worker_txt, 1):
             rel      = src_path.relative_to(INPUT_ROOT)
             dst_txt  = OUTPUT_ROOT / rel
             dst_meta = dst_txt.with_suffix(".meta.json")
@@ -516,7 +552,7 @@ def main():
                 continue
 
             dst_txt.parent.mkdir(parents=True, exist_ok=True)
-            print(f"[{idx}/{total}] {rel}", flush=True)
+            print(f"{prefix} [{idx}/{total_worker}] {rel}", flush=True)
 
             t0 = time.perf_counter()
             try:
@@ -541,7 +577,7 @@ def main():
 
                 stats["procesados"] += 1
                 stats["tiempo_total"] += elapsed
-                print(f"    OK  ({elapsed:.1f}s)", flush=True)
+                print(f"{prefix}     OK  ({elapsed:.1f}s)", flush=True)
 
             except Exception:
                 elapsed = time.perf_counter() - t0
@@ -556,7 +592,7 @@ def main():
                 )
 
             # Abrir nuevo chat para el siguiente archivo y esperar
-            if idx < total:
+            if idx < total_worker:
                 bot.new_chat()
                 time.sleep(DELAY_BETWEEN_FILES)
 
