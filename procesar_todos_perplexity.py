@@ -96,6 +96,18 @@ RESPONSE_SELECTORS = [
     "div.col-span-8",          # fallback estructural
 ]
 
+# Botón de envío del mensaje
+SUBMIT_SELECTORS = [
+    "button[aria-label*='Submit']",
+    "button[aria-label*='submit']",
+    "button[aria-label*='Send']",
+    "button[aria-label*='send']",
+    "button[aria-label*='Enviar']",
+    "[data-testid*='submit']",
+    "[data-testid*='send']",
+    "button[type='submit']",
+]
+
 # Indicador de que la respuesta todavía se está generando (botón "detener")
 STILL_GENERATING_SELECTORS = [
     "button[aria-label*='Stop']",
@@ -411,38 +423,70 @@ class PerplexityBot:
                 continue
         return ""
 
-    def _wait_for_response(self) -> str:
-        """Espera a que la respuesta termine de generarse y la devuelve."""
-        deadline = time.time() + RESPONSE_TIMEOUT
-        last_text = ""
-        stable_count = 0
-
-        # Dar tiempo al modelo para empezar a responder
-        time.sleep(DELAY_AFTER_SUBMIT)
-
-        while time.time() < deadline:
-            # Si hay indicador de "generando", esperar más
-            if self._is_still_generating():
-                stable_count = 0
-                time.sleep(POLL_INTERVAL)
-                last_text = self._get_response_text()
+    def _click_submit(self) -> bool:
+        """Intenta hacer clic en el botón de envío. Devuelve True si tuvo éxito."""
+        for sel in SUBMIT_SELECTORS:
+            try:
+                el = self.driver.find_element(By.CSS_SELECTOR, sel)
+                if el.is_displayed() and el.is_enabled():
+                    el.click()
+                    return True
+            except (NoSuchElementException, StaleElementReferenceException, Exception):
                 continue
+        return False
 
-            current_text = self._get_response_text()
-            if current_text and current_text == last_text:
-                stable_count += 1
-                if stable_count >= STABLE_POLLS_NEEDED:
-                    return current_text
+    def _wait_for_response(self) -> str:
+        """Espera a que la respuesta termine de generarse y la devuelve.
+
+        Si la página se traba (sin actividad durante RESPONSE_TIMEOUT segundos),
+        intenta hacer clic en el botón de envío para reactivar la consulta.
+        Repite indefinidamente hasta obtener una respuesta estable.
+        """
+        attempt = 0
+
+        while True:
+            attempt += 1
+            deadline = time.time() + RESPONSE_TIMEOUT
+            last_text = ""
+            stable_count = 0
+
+            # Dar tiempo al modelo para empezar a responder
+            time.sleep(DELAY_AFTER_SUBMIT)
+
+            while time.time() < deadline:
+                # Si hay indicador de "generando", esperar más
+                if self._is_still_generating():
+                    stable_count = 0
+                    time.sleep(POLL_INTERVAL)
+                    last_text = self._get_response_text()
+                    continue
+
+                current_text = self._get_response_text()
+                if current_text and current_text == last_text:
+                    stable_count += 1
+                    if stable_count >= STABLE_POLLS_NEEDED:
+                        return current_text
+                else:
+                    stable_count = 0
+                    last_text = current_text
+
+                time.sleep(POLL_INTERVAL)
+
+            # Timeout alcanzado: intentar reactivar haciendo clic en el botón
+            print(
+                f"    ⚠ Timeout (intento {attempt}): sin respuesta. "
+                f"Intentando clic en botón de envío…",
+                flush=True,
+            )
+            self.wait_for_human(f"timeout intento {attempt}")
+            clicked = self._click_submit()
+            if clicked:
+                print("    ↺ Botón pulsado, esperando respuesta…", flush=True)
             else:
-                stable_count = 0
-                last_text = current_text
-
-            time.sleep(POLL_INTERVAL)
-
-        # Timeout: devolver lo que tengamos
-        print("    ⚠ Timeout esperando respuesta; se guarda lo obtenido hasta ahora.",
-              flush=True)
-        return last_text or ""
+                print(
+                    f"    ⚠ Botón no encontrado, reintentando en {RESPONSE_TIMEOUT}s…",
+                    flush=True,
+                )
 
     # ── Método principal ───────────────────────────────────────────────────────
     def query(self, text: str) -> str:
@@ -456,10 +500,12 @@ class PerplexityBot:
         # Pequeña pausa para que React habilite el botón de envío
         time.sleep(0.6)
 
-        # Intentar enviar con Enter (más fiable que buscar el botón)
-        input_el.send_keys(Keys.RETURN)
+        # Intentar primero con clic en el botón (más robusto ante errores de Perplexity)
+        # y como fallback usar Enter
+        if not self._click_submit():
+            input_el.send_keys(Keys.RETURN)
 
-        # Verificar de nuevo por si el Enter disparó un login wall
+        # Verificar de nuevo por si el envío disparó un login wall
         time.sleep(1)
         self.wait_for_human("después de enviar consulta")
 
