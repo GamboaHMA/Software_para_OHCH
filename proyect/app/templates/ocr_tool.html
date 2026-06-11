@@ -1,0 +1,530 @@
+{% extends "base.html" %}
+{% block title %}Herramienta OCR | Corpus Documental{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Drop zone ─────────────────────────────────────────────── */
+  #drop-zone {
+    border: 2.5px dashed #6c757d;
+    border-radius: 0.75rem;
+    background: #f8f9fa;
+    cursor: pointer;
+    transition: border-color 0.2s, background 0.2s;
+    min-height: 140px;
+  }
+  #drop-zone.drag-over { border-color: #0d6efd; background: #e8f0fe; }
+  #drop-zone.has-file  { border-color: #198754; background: #f0fff4; }
+  #drop-zone .dz-icon  { font-size: 2.2rem; }
+  #file-input { display: none; }
+
+  /* ── Progress ───────────────────────────────────────────────── */
+  #progress-bar  { transition: width 0.35s ease; }
+
+  .step-badge {
+    display: inline-flex; align-items: center; gap: 0.3rem;
+    font-size: 0.8rem; padding: 0.2rem 0.6rem;
+    border-radius: 99px; font-weight: 500;
+  }
+  .step-badge.pending { background:#e9ecef; color:#6c757d; }
+  .step-badge.active  { background:#cfe2ff; color:#084298; }
+  .step-badge.done    { background:#d1e7dd; color:#0a3622; }
+  .step-badge.error   { background:#f8d7da; color:#58151c; }
+
+  /* ── Result panels ──────────────────────────────────────────── */
+  .ocr-text-box {
+    font-family: Georgia, serif; font-size: 0.875rem; line-height: 1.9;
+    white-space: pre-wrap; word-break: break-word;
+    max-height: 40vh; overflow-y: auto;
+    background: #fff; border: 1px solid #dee2e6;
+    border-radius: 0.5rem; padding: 0.875rem; color: #2d2d2d;
+  }
+
+  /* ── PDF info bar ───────────────────────────────────────────── */
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-12 col-xl-11">
+
+    <div class="d-flex justify-content-between align-items-center mb-3">
+      <h1 class="h4 mb-0">Herramienta OCR</h1>
+      <a href="{{ url_for('main.index') }}" class="btn btn-outline-secondary btn-sm">← Volver</a>
+    </div>
+
+    {# ═══════════════════ TOP ROW: upload + options ═══════════════════ #}
+    <div class="row g-3 mb-3">
+
+      {# Drop zone #}
+      <div class="col-12 col-md-5">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-white fw-semibold small">1. Seleccionar PDF</div>
+          <div class="card-body d-flex flex-column gap-2">
+            <div id="drop-zone"
+                 class="d-flex flex-column align-items-center justify-content-center gap-2 p-3"
+                 role="button" tabindex="0"
+                 aria-label="Zona de arrastre para PDF">
+              <div class="dz-icon text-secondary">📄</div>
+              <p class="mb-0 text-muted text-center small" id="dz-label">
+                Arrastra un PDF aquí<br>o haz clic para seleccionarlo
+              </p>
+            </div>
+            <input type="file" id="file-input" accept=".pdf">
+
+            {# PDF info bar (visible once a file is loaded) #}
+            <div id="pdf-info-bar"
+                 class="alert alert-info py-2 px-3 mb-0 d-flex justify-content-between align-items-center small d-none">
+              <span>📎 <strong id="pdf-info-name"></strong>
+                &nbsp;·&nbsp; <span id="pdf-info-size"></span></span>
+              <a id="pdf-preview-link" href="#" target="_blank"
+                 class="btn btn-outline-info btn-sm py-0">Ver PDF</a>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# Model + start #}
+      <div class="col-12 col-md-7">
+        <div class="card shadow-sm h-100">
+          <div class="card-header bg-white fw-semibold small">2. Preprocesamiento</div>
+          <div class="card-body d-flex flex-column justify-content-between gap-2">
+            <div class="d-flex flex-column gap-2">
+
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="model" id="m-ninguno" value="ninguno">
+                <label class="form-check-label" for="m-ninguno">
+                  <strong>Sin preprocesamiento</strong>
+                  <span class="d-block text-muted small">Solo OCR crudo.</span>
+                </label>
+              </div>
+
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="model" id="m-artesanal" value="artesanal" checked>
+                <label class="form-check-label" for="m-artesanal">
+                  <strong>Modelo artesanal</strong>
+                  <span class="d-block text-muted small">spaCy + Hunspell + KenLM · rápido · sin GPU.</span>
+                </label>
+              </div>
+
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="model" id="m-qwen" value="qwen">
+                <label class="form-check-label" for="m-qwen">
+                  <strong>Qwen 2.5 · 3B</strong>
+                  <span class="d-block text-muted small">LLM local Ollama — contexto 8 192 tok.</span>
+                </label>
+              </div>
+
+              <div class="form-check">
+                <input class="form-check-input" type="radio" name="model" id="m-salamandra" value="salamandra">
+                <label class="form-check-label" for="m-salamandra">
+                  <strong>Salamandra 7B</strong>
+                  <span class="d-block text-muted small">LLM local Ollama — español histórico.</span>
+                </label>
+              </div>
+            </div>
+
+            <button id="btn-start" class="btn btn-primary w-100 mt-1" disabled>
+              Iniciar procesamiento
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>{# /top row #}
+
+    {# ═══════════════════ PROGRESS ═══════════════════════════════════ #}
+    <div id="progress-wrap" class="card shadow-sm mb-3 d-none">
+      <div class="card-header bg-white fw-semibold small d-flex justify-content-between align-items-center">
+        <span>Progreso</span>
+        <div class="d-flex gap-2">
+          <span class="step-badge pending" id="badge-ocr">🔍 OCR</span>
+          <span class="step-badge pending" id="badge-pre">⚙️ Preprocesamiento</span>
+        </div>
+      </div>
+      <div class="card-body pb-2">
+        <div class="progress" style="height:22px;border-radius:0.5rem"
+             role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100">
+          <div id="progress-bar"
+               class="progress-bar progress-bar-striped progress-bar-animated bg-primary"
+               style="width:0%">0%</div>
+        </div>
+        <p class="text-muted small mt-2 mb-0" id="progress-msg">Iniciando…</p>
+      </div>
+    </div>
+
+    {# ═══════════════════ RESULT SECTION ══════════════════════════════ #}
+    <div id="result-section" class="d-none">
+
+      {# Text tabs #}
+      <div class="card shadow-sm mb-3">
+        <div class="card-header bg-white d-flex justify-content-between align-items-center py-2">
+          <ul class="nav nav-tabs card-header-tabs mb-0" id="text-tabs" role="tablist">
+            <li class="nav-item" role="presentation">
+              <button class="nav-link active" id="tab-processed-btn"
+                      data-bs-toggle="tab" data-bs-target="#tab-processed"
+                      type="button" role="tab">Texto preprocesado</button>
+            </li>
+            <li class="nav-item" role="presentation">
+              <button class="nav-link" id="tab-raw-btn"
+                      data-bs-toggle="tab" data-bs-target="#tab-raw"
+                      type="button" role="tab">OCR crudo</button>
+            </li>
+          </ul>
+          <div class="d-flex gap-2">
+            <button id="btn-copy-processed" class="btn btn-outline-secondary btn-sm">Copiar</button>
+          </div>
+        </div>
+        <div class="tab-content card-body p-2">
+          <div class="tab-pane fade show active" id="tab-processed" role="tabpanel">
+            <div id="text-processed" class="ocr-text-box"></div>
+          </div>
+          <div class="tab-pane fade" id="tab-raw" role="tabpanel">
+            <div id="text-raw" class="ocr-text-box"></div>
+          </div>
+        </div>
+      </div>
+
+      {# Save form #}
+      <div class="card shadow-sm mb-3 d-none" id="save-card">
+        <div class="card-header bg-white fw-semibold small d-flex justify-content-between">
+          <span>💾 Guardar en base de datos</span>
+          <span class="text-muted" style="font-size:0.77rem">Los campos con * son obligatorios</span>
+        </div>
+        <div class="card-body">
+          <div class="row g-2">
+            <div class="col-md-3">
+              <label class="form-label form-label-sm">ID del documento *</label>
+              <input type="text" id="save-doc-id" class="form-control form-control-sm"
+                     placeholder="DOC-0001">
+            </div>
+            <div class="col-md-9">
+              <label class="form-label form-label-sm">Título *</label>
+              <input type="text" id="save-title" class="form-control form-control-sm"
+                     placeholder="Título del documento">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label form-label-sm">Archivo y fondo</label>
+              <input type="text" id="save-archive" class="form-control form-control-sm"
+                     placeholder="Archivo Histórico Nacional">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label form-label-sm">Año</label>
+              <input type="number" id="save-year" class="form-control form-control-sm"
+                     placeholder="1650" min="800" max="1900">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label form-label-sm">Clasificación</label>
+              <input type="text" id="save-class" class="form-control form-control-sm"
+                     placeholder="carta">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label form-label-sm">Autor</label>
+              <input type="text" id="save-author" class="form-control form-control-sm"
+                     placeholder="Anónimo">
+            </div>
+            <div class="col-md-8">
+              <label class="form-label form-label-sm">Notas</label>
+              <input type="text" id="save-notes" class="form-control form-control-sm"
+                     placeholder="Observaciones">
+            </div>
+          </div>
+          <div class="d-flex gap-2 mt-3 align-items-center">
+            <button id="btn-save" class="btn btn-success btn-sm px-4">
+              Guardar documento
+            </button>
+            <span id="save-spinner" class="spinner-border spinner-border-sm text-success d-none"
+                  role="status"></span>
+            <span id="save-status" class="small"></span>
+          </div>
+        </div>
+      </div>
+
+      {# Success banner (hidden until saved) #}
+      <div id="save-success" class="alert alert-success d-none d-flex justify-content-between align-items-center">
+        <span>✅ Documento guardado correctamente en la base de datos.</span>
+        <a id="save-link" href="#" class="btn btn-success btn-sm">Ver documento →</a>
+      </div>
+
+    </div>{# /result-section #}
+
+    {# Error banner #}
+    <div id="error-wrap" class="alert alert-danger mt-3 d-none">
+      <strong>Error:</strong> <span id="error-msg"></span>
+    </div>
+
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(function () {
+  'use strict';
+
+  // ── State ─────────────────────────────────────────────────────────────────
+  let selectedFile = null;
+  let taskId       = null;
+  let objectUrl    = null;   // blob URL for PDF preview
+  let isProcessing = false;
+
+  // ── DOM refs ──────────────────────────────────────────────────────────────
+  const dropZone       = document.getElementById('drop-zone');
+  const fileInput      = document.getElementById('file-input');
+  const dzLabel        = document.getElementById('dz-label');
+  const pdfInfoBar     = document.getElementById('pdf-info-bar');
+  const pdfInfoName    = document.getElementById('pdf-info-name');
+  const pdfInfoSize    = document.getElementById('pdf-info-size');
+  const pdfPreviewLink = document.getElementById('pdf-preview-link');
+  const btnStart       = document.getElementById('btn-start');
+  const progressWrap   = document.getElementById('progress-wrap');
+  const progressBar    = document.getElementById('progress-bar');
+  const progressMsg    = document.getElementById('progress-msg');
+  const badgeOcr       = document.getElementById('badge-ocr');
+  const badgePre       = document.getElementById('badge-pre');
+  const resultSection  = document.getElementById('result-section');
+  const textProcessed  = document.getElementById('text-processed');
+  const textRaw        = document.getElementById('text-raw');
+  const btnCopyPro     = document.getElementById('btn-copy-processed');
+  const saveCard       = document.getElementById('save-card');
+  const btnSave        = document.getElementById('btn-save');
+  const saveSpinner    = document.getElementById('save-spinner');
+  const saveStatus     = document.getElementById('save-status');
+  const saveSuccess    = document.getElementById('save-success');
+  const saveLink       = document.getElementById('save-link');
+  const errorWrap      = document.getElementById('error-wrap');
+  const errorMsg       = document.getElementById('error-msg');
+
+  // ── Drop zone ─────────────────────────────────────────────────────────────
+  function setFile(file) {
+    if (!file || !file.name.toLowerCase().endsWith('.pdf')) {
+      alert('Por favor selecciona un archivo PDF.'); return;
+    }
+    selectedFile = file;
+
+    // Revoke previous blob URL
+    if (objectUrl) URL.revokeObjectURL(objectUrl);
+    objectUrl = URL.createObjectURL(file);
+
+    dropZone.classList.add('has-file');
+    dzLabel.innerHTML =
+      `<strong class="text-success small">${file.name}</strong>` +
+      `<br><span class="text-muted" style="font-size:0.75rem">` +
+      `${(file.size/1024).toFixed(1)} KB · clic para cambiar</span>`;
+
+    pdfInfoName.textContent = file.name;
+    pdfInfoSize.textContent = (file.size / 1024).toFixed(1) + ' KB';
+    pdfPreviewLink.href = objectUrl;
+    pdfInfoBar.classList.remove('d-none');
+
+    btnStart.disabled = false;
+  }
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', e => {
+    if (e.key === 'Enter' || e.key === ' ') fileInput.click();
+  });
+  fileInput.addEventListener('change', () => { if (fileInput.files[0]) setFile(fileInput.files[0]); });
+  dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+  dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+  dropZone.addEventListener('drop', e => {
+    e.preventDefault();
+    if (e.dataTransfer.files[0]) setFile(e.dataTransfer.files[0]);
+  });
+
+  // ── Progress helpers ──────────────────────────────────────────────────────
+  function setProgress(pct, msg) {
+    const p = Math.max(0, Math.min(100, pct));
+    progressBar.style.width = p + '%';
+    progressBar.textContent = p + '%';
+    progressBar.parentElement.setAttribute('aria-valuenow', p);
+    if (msg) progressMsg.textContent = msg;
+  }
+
+  function setBadge(el, state) { el.className = 'step-badge ' + state; }
+
+  function showError(msg) {
+    errorWrap.classList.remove('d-none');
+    errorMsg.textContent = msg;
+    progressBar.classList.remove('progress-bar-animated', 'bg-primary');
+    progressBar.classList.add('bg-danger');
+  }
+
+  function resetProgress() {
+    progressWrap.classList.add('d-none');
+    resultSection.classList.add('d-none');
+    errorWrap.classList.add('d-none');
+    saveSuccess.classList.add('d-none');
+    saveStatus.textContent = '';
+    saveStatus.className = 'small';
+    progressBar.style.width = '0%';
+    progressBar.textContent = '0%';
+    progressBar.className = 'progress-bar progress-bar-striped progress-bar-animated bg-primary';
+    setBadge(badgeOcr, 'pending');
+    setBadge(badgePre, 'pending');
+  }
+
+  // ── Start processing ──────────────────────────────────────────────────────
+  btnStart.addEventListener('click', async () => {
+    if (!selectedFile || isProcessing) return;
+
+    const model = document.querySelector('input[name="model"]:checked')?.value ?? 'artesanal';
+
+    resetProgress();
+    isProcessing = true;
+    btnStart.disabled = true;
+    btnStart.textContent = 'Procesando…';
+    progressWrap.classList.remove('d-none');
+    setProgress(2, 'Enviando PDF al servidor…');
+
+    // Upload
+    const fd = new FormData();
+    fd.append('pdf', selectedFile);
+    fd.append('model', model);
+
+    let resp, uploadData;
+    try {
+      resp = await fetch('/api/ocr/upload', { method: 'POST', body: fd });
+      uploadData = await resp.json();
+    } catch (e) {
+      showError('No se pudo conectar con el servidor: ' + e.message);
+      resetBtn(); return;
+    }
+    if (!resp.ok || uploadData.error) {
+      showError(uploadData.error || 'Error al enviar el archivo.');
+      resetBtn(); return;
+    }
+
+    taskId = uploadData.task_id;
+    setProgress(5, 'Iniciando OCR…');
+
+    // SSE stream
+    const es = new EventSource(`/api/ocr/stream/${taskId}`);
+
+    es.onmessage = (event) => {
+      let msg;
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (msg.type === 'keepalive') return;
+
+      if (msg.type === 'progress') {
+        setProgress(msg.pct ?? 0, msg.msg ?? '');
+        if (msg.step === 'ocr') {
+          setBadge(badgeOcr, 'active');
+        } else if (msg.step === 'preprocess') {
+          setBadge(badgeOcr, 'done');
+          setBadge(badgePre, 'active');
+        }
+
+      } else if (msg.type === 'done') {
+        setBadge(badgeOcr, 'done');
+        setBadge(badgePre, 'done');
+        progressBar.classList.remove('progress-bar-animated', 'bg-primary');
+        progressBar.classList.add('bg-success');
+        setProgress(100, '¡Proceso completado!');
+
+        textProcessed.textContent = msg.processed_text ?? '';
+        textRaw.textContent       = msg.raw_text       ?? '';
+        resultSection.classList.remove('d-none');
+        saveCard.classList.remove('d-none');
+        saveSuccess.classList.add('d-none');
+
+        es.close();
+        resetBtn();
+
+      } else if (msg.type === 'error') {
+        showError(msg.msg ?? 'Error desconocido.');
+        if (msg.trace) console.error(msg.trace);
+        setBadge(badgePre, 'error');
+        es.close();
+        resetBtn();
+      }
+    };
+
+    es.onerror = () => {
+      showError('Se perdió la conexión durante el proceso.');
+      es.close();
+      resetBtn();
+    };
+  });
+
+  function resetBtn() {
+    isProcessing = false;
+    btnStart.disabled = !selectedFile;
+    btnStart.textContent = 'Iniciar procesamiento';
+  }
+
+  // ── Copy button (copies whichever tab is active) ──────────────────────────
+  btnCopyPro.addEventListener('click', async () => {
+    const activePane = document.querySelector('.tab-pane.active');
+    const box = activePane ? activePane.querySelector('.ocr-text-box') : null;
+    if (!box) return;
+    try {
+      await navigator.clipboard.writeText(box.textContent);
+      btnCopyPro.textContent = '✓ Copiado';
+      setTimeout(() => { btnCopyPro.textContent = 'Copiar'; }, 2000);
+    } catch { btnCopyPro.textContent = 'Error'; }
+  });
+
+  // ── Save to DB ────────────────────────────────────────────────────────────
+  btnSave.addEventListener('click', async () => {
+    if (!taskId) return;
+
+    const docId = document.getElementById('save-doc-id').value.trim();
+    const title = document.getElementById('save-title').value.trim();
+    if (!docId || !title) {
+      saveStatus.textContent = 'El ID del documento y el título son obligatorios.';
+      saveStatus.className = 'small text-danger';
+      return;
+    }
+
+    btnSave.disabled = true;
+    saveSpinner.classList.remove('d-none');
+    saveStatus.textContent = 'Guardando…';
+    saveStatus.className = 'small text-muted';
+
+    const payload = {
+      task_id:      taskId,
+      doc_id:       docId,
+      title:        title,
+      archive:      document.getElementById('save-archive').value.trim(),
+      date_year:    document.getElementById('save-year').value.trim(),
+      classification: document.getElementById('save-class').value.trim(),
+      author:       document.getElementById('save-author').value.trim(),
+      notes:        document.getElementById('save-notes').value.trim(),
+    };
+
+    let resp, data;
+    try {
+      resp = await fetch('/api/ocr/save', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      data = await resp.json();
+    } catch (e) {
+      saveStatus.textContent = 'Error de red: ' + e.message;
+      saveStatus.className = 'small text-danger';
+      btnSave.disabled = false;
+      saveSpinner.classList.add('d-none');
+      return;
+    }
+
+    saveSpinner.classList.add('d-none');
+
+    if (!resp.ok || data.error) {
+      saveStatus.textContent = data.error || 'Error al guardar.';
+      saveStatus.className = 'small text-danger';
+      btnSave.disabled = false;
+      return;
+    }
+
+    // Success
+    saveStatus.textContent = '';
+    saveCard.classList.add('d-none');
+    saveSuccess.classList.remove('d-none');
+    saveLink.href = `/documento/${data.db_id}`;
+    taskId = null;   // prevent double-save
+  });
+
+})();
+</script>
+{% endblock %}
+

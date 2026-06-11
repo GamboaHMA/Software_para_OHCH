@@ -21,6 +21,10 @@
           <a class="nav-link {{ 'active' if request.endpoint == 'main.import_view' }}"
              href="{{ url_for('main.import_view') }}">Importar</a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link {{ 'active' if request.endpoint == 'main.ocr_tool' }}"
+             href="{{ url_for('main.ocr_tool') }}">OCR</a>
+        </li>
       </ul>
       <div class="text-white-50 small d-none d-md-block">Flask · SQLite · PDF.js · Bootstrap</div>
     </div>

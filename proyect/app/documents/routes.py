@@ -1,9 +1,13 @@
+import json
 import os
+import queue as _queue_mod
+
 from flask import (
     Blueprint, render_template, request, jsonify,
-    abort, send_file, current_app,
+    abort, send_file, current_app, Response, stream_with_context,
 )
 from app.documents import services
+from app.utils import ocr_processing
 
 bp = Blueprint("main", __name__)
 
@@ -86,3 +90,140 @@ def import_view():
         from app.utils.imports_docs import import_single_document
         result = import_single_document(request)
     return render_template("import.html", result=result)
+
+
+# ── OCR Tool ──────────────────────────────────────────────────────────────────
+
+@bp.route("/ocr-herramienta")
+def ocr_tool():
+    return render_template("ocr_tool.html")
+
+
+@bp.route("/api/ocr/upload", methods=["POST"])
+def ocr_upload():
+    if "pdf" not in request.files:
+        return jsonify({"error": "No se recibió ningún archivo PDF"}), 400
+
+    pdf_file = request.files["pdf"]
+    if not pdf_file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El archivo debe ser un PDF"}), 400
+
+    model = request.form.get("model", "artesanal")
+    if model not in ("salamandra", "qwen", "artesanal", "ninguno"):
+        return jsonify({"error": "Modelo no válido"}), 400
+
+    pdf_name = pdf_file.filename
+    pdf_bytes = pdf_file.read()
+    task_id = ocr_processing.start_ocr_task(pdf_bytes, pdf_name, model)
+    return jsonify({"task_id": task_id, "pdf_name": pdf_name})
+
+
+@bp.route("/api/ocr/save", methods=["POST"])
+def ocr_save():
+    from datetime import datetime, timezone
+    from app.models import Document
+    from app import db
+    import shutil
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    task_id = data.get("task_id", "").strip()
+    doc_id  = data.get("doc_id", "").strip()
+    title   = data.get("title", "").strip()
+
+    if not task_id:
+        return jsonify({"error": "task_id requerido"}), 400
+    if not doc_id or not title:
+        return jsonify({"error": "ID de documento y título son obligatorios"}), 400
+
+    if Document.query.filter_by(doc_id=doc_id).first():
+        return jsonify({"error": f"Ya existe un documento con ID '{doc_id}'"}), 409
+
+    result = ocr_processing.get_task_result(task_id)
+    if result is None:
+        return jsonify({"error": "Tarea no encontrada o ya expirada"}), 404
+
+    # ── Save PDF to data/pdfs/ ─────────────────────────────────────────────
+    pdf_dest_name = None
+    if result["pdf_path"] and os.path.isfile(result["pdf_path"]):
+        safe_name = os.path.basename(result["pdf_name"] or f"{doc_id}.pdf")
+        pdf_dest = os.path.join(current_app.config["PDF_DIR"], safe_name)
+        # Avoid collisions
+        if os.path.exists(pdf_dest):
+            base, ext = os.path.splitext(safe_name)
+            safe_name = f"{base}_{doc_id}{ext}"
+            pdf_dest = os.path.join(current_app.config["PDF_DIR"], safe_name)
+        shutil.copy2(result["pdf_path"], pdf_dest)
+        pdf_dest_name = safe_name
+
+    # ── Compute century from year ──────────────────────────────────────────
+    date_year = data.get("date_year", None)
+    try:
+        date_year = int(date_year) if date_year not in (None, "") else None
+    except (ValueError, TypeError):
+        date_year = None
+    century = ((date_year - 1) // 100 + 1) if date_year else None
+
+    # ── Create DB record ───────────────────────────────────────────────────
+    doc = Document(
+        doc_id=doc_id,
+        title=title,
+        archive=data.get("archive") or None,
+        date_raw=data.get("date_raw") or None,
+        date_year=date_year,
+        century=century,
+        location_country=data.get("location_country") or "España",
+        classification=data.get("classification") or None,
+        author=data.get("author") or None,
+        language=data.get("language") or "español",
+        ocr_text=result["raw_text"],
+        ocr_text_edited=result["processed_text"] if result["processed_text"] != result["raw_text"] else None,
+        pdf_filename=pdf_dest_name,
+        notes=data.get("notes") or None,
+    )
+    db.session.add(doc)
+    db.session.commit()
+
+    print(
+        f"[OCR] Guardado en base de datos: "
+        f"doc_id='{doc.doc_id}'  título='{doc.title}'  "
+        f"id={doc.id}  pdf='{pdf_dest_name}'",
+        flush=True,
+    )
+
+    # ── Clean up temp PDF and task ─────────────────────────────────────────
+    ocr_processing.cleanup_task(task_id)
+
+    return jsonify({"ok": True, "db_id": doc.id, "doc_id": doc.doc_id})
+
+
+@bp.route("/api/ocr/stream/<task_id>")
+def ocr_stream(task_id):
+    def generate():
+        q = ocr_processing.get_task_queue(task_id)
+        if q is None:
+            yield f"data: {json.dumps({'type': 'error', 'msg': 'Tarea no encontrada'})}\n\n"
+            return
+        try:
+            while True:
+                try:
+                    msg = q.get(timeout=60)
+                    yield f"data: {json.dumps(msg, ensure_ascii=False)}\n\n"
+                    if msg.get("type") in ("done", "error"):
+                        break
+                except _queue_mod.Empty:
+                    # Keepalive so the browser doesn't time out
+                    yield 'data: {"type":"keepalive"}\n\n'
+        finally:
+            ocr_processing.remove_task(task_id)
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
