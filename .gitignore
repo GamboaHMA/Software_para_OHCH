@@ -25,3 +25,8 @@ papers
 probando_tesseract.py
 pdfs_prueba
 ocr.md
+deepseek_api_key.py
+procesar_todos_dpseek_api.md
+proyect/data/pdfs
+match_para_base_de_datos.py
+__pycache__
