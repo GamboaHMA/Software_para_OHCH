@@ -2,28 +2,33 @@
 """
 load_from_reconstrucciones.py
 ─────────────────────────────
-Empareja los PDFs en proyect/data/pdfs/ con los textos reconstruidos en
-Reconstrucciones_qwen_deepseek/ e inserta / actualiza los registros en la
-base de datos de la aplicación.
+Empareja los PDFs página a página con los textos reconstruidos e inserta /
+actualiza los registros en la base de datos de la aplicación.
 
 Uso básico:
     cd proyect/
     python load_from_reconstrucciones.py               # inserta los nuevos
     python load_from_reconstrucciones.py --dry-run     # solo muestra el match, sin tocar la DB
     python load_from_reconstrucciones.py --force       # sobreescribe registros existentes
-    python load_from_reconstrucciones.py --solo-pdf    # incluye PDFs que todavía no tienen TXT
+    python load_from_reconstrucciones.py --solo-pdf    # incluye páginas sin TXT todavía
 
 Estructura esperada:
   proyect/data/pdfs/
       ohcbh_cf_erlXXX/
-          PDF_ohcbh_cf_erlXXX/
-              ohcbh_cf_erlXXX_bn.pdf
+          Articulos_ohcbh_cf_erlXXX/
+              ohcbh_cf_erlXXX_001.pdf   ← PDF de la página 1
+              ohcbh_cf_erlXXX_002.pdf
+              ...
 
   ../Reconstrucciones_qwen_deepseek/
       Articulos_ohcbh_cf_erlXXX/
-          ohcbh_cf_erlXXX_001.pdf.txt
+          ohcbh_cf_erlXXX_001.pdf.txt   ← texto reconstruido de la página 1
           ohcbh_cf_erlXXX_002.pdf.txt
           ...
+
+El emparejamiento es página a página: el stem del PDF (sin .pdf) coincide con
+el prefijo del TXT (sin .pdf.txt).
+  ohcbh_cf_erlXXX_001.pdf  ↔  ohcbh_cf_erlXXX_001.pdf.txt
 """
 
 import os
@@ -47,46 +52,24 @@ RECONSTRUCCIONES_DIR = ROOT_DIR / "Reconstrucciones_qwen_deepseek"
 CSV_PATH = ROOT_DIR / "Listado completo Facticia.csv"
 PDF_DIR = SCRIPT_DIR / "data" / "pdfs"
 
-# ─── Patrón de identificador de documento ─────────────────────────────────────
+# ─── Patrón de identificador de documento padre ───────────────────────────────
 DOC_ID_RE = re.compile(r"^ohcbh_cf_erl(\d+[A-Za-z]?)$")
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Fase 1: Escaneo de PDFs
+# Fase 1: Escaneo de PDFs página a página
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _find_pdf_in_subdir(pdf_subdir: Path, doc_id: str) -> Path | None:
+def scan_pdfs() -> dict[str, tuple[Path, str]]:
     """
-    Busca el PDF del documento dentro de pdf_subdir con tolerancia a:
-      - sufijo _bn opcional (ohcbh_cf_erlXXX_bn.pdf o ohcbh_cf_erlXXX.pdf)
-      - diferencias de mayúsculas/minúsculas en la letra al final del ID
-    """
-    # Candidatos en orden de preferencia
-    candidates = [
-        f"{doc_id}_bn.pdf",
-        f"{doc_id}.pdf",
-        f"{doc_id.lower()}_bn.pdf",
-        f"{doc_id.lower()}.pdf",
-    ]
-    for name in candidates:
-        p = pdf_subdir / name
-        if p.is_file():
-            return p
-    # Fallback: cualquier PDF en el directorio
-    pdf_files = [f for f in pdf_subdir.iterdir() if f.suffix.lower() == ".pdf" and f.name != "index.html"]
-    if len(pdf_files) == 1:
-        return pdf_files[0]
-    return None
+    Recorre PDF_DIR buscando PDFs individuales dentro de
+    ohcbh_cf_erlXXX/Articulos_ohcbh_cf_erlXXX/.
 
-
-def scan_pdfs() -> dict[str, Path]:
+    Retorna {page_stem: (ruta_relativa_desde_PDF_DIR, parent_doc_id)}
+    Ejemplo:
+      'ohcbh_cf_erl1_001' → (PosixPath('ohcbh_cf_erl1/Articulos_.../ohcbh_cf_erl1_001.pdf'), 'ohcbh_cf_erl1')
     """
-    Recorre PDF_DIR buscando archivos PDF (preferiblemente *_bn.pdf).
-
-    Retorna {doc_id: ruta_relativa_desde_PDF_DIR}
-    Ejemplo: {'ohcbh_cf_erl1': PosixPath('ohcbh_cf_erl1/PDF_ohcbh_cf_erl1/ohcbh_cf_erl1_bn.pdf')}
-    """
-    pdfs: dict[str, Path] = {}
+    pdfs: dict[str, tuple[Path, str]] = {}
     if not PDF_DIR.is_dir():
         print(f"[ERROR] PDF_DIR no encontrado: {PDF_DIR}")
         return pdfs
@@ -94,58 +77,56 @@ def scan_pdfs() -> dict[str, Path]:
     for doc_dir in sorted(PDF_DIR.iterdir()):
         if not doc_dir.is_dir():
             continue
-        doc_id = doc_dir.name
-        if not DOC_ID_RE.match(doc_id):
+        parent_doc_id = doc_dir.name
+        if not DOC_ID_RE.match(parent_doc_id):
             continue
 
-        pdf_subdir = doc_dir / f"PDF_{doc_id}"
-        if not pdf_subdir.is_dir():
+        articulos_dir = doc_dir / f"Articulos_{parent_doc_id}"
+        if not articulos_dir.is_dir():
             continue
 
-        pdf_file = _find_pdf_in_subdir(pdf_subdir, doc_id)
-        if pdf_file:
-            pdfs[doc_id] = pdf_file.relative_to(PDF_DIR)
+        for pdf_file in sorted(articulos_dir.iterdir()):
+            if pdf_file.suffix.lower() != ".pdf" or pdf_file.name == "index.html":
+                continue
+            page_stem = pdf_file.stem          # ohcbh_cf_erl1_001
+            rel_path = pdf_file.relative_to(PDF_DIR)
+            pdfs[page_stem] = (rel_path, parent_doc_id)
 
     return pdfs
 
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Fase 2: Escaneo de textos reconstruidos
+# Fase 2: Escaneo de textos reconstruidos página a página
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _sort_key(path: Path) -> tuple:
-    """Ordena txt por número de página embedded en el nombre."""
-    m = re.search(r"_(\d+)\.pdf\.txt$", path.name)
-    return (int(m.group(1)) if m else 0, path.name)
-
-
-def scan_reconstrucciones() -> dict[str, list[Path]]:
+def scan_reconstrucciones() -> dict[str, tuple[Path, str]]:
     """
-    Recorre Reconstrucciones_qwen_deepseek/ buscando subcarpetas Articulos_*.
+    Recorre Reconstrucciones_qwen_deepseek/ buscando archivos *.pdf.txt dentro
+    de cada carpeta Articulos_ohcbh_cf_erlXXX/.
 
-    Retorna {doc_id: lista_de_txts_ordenada_por_página}
+    Retorna {page_stem: (ruta_absoluta_al_txt, parent_doc_id)}
+    Ejemplo:
+      'ohcbh_cf_erl1_001' → (PosixPath('.../ohcbh_cf_erl1_001.pdf.txt'), 'ohcbh_cf_erl1')
     """
-    txts: dict[str, list[Path]] = {}
+    txts: dict[str, tuple[Path, str]] = {}
     if not RECONSTRUCCIONES_DIR.is_dir():
         print(f"[ERROR] Reconstrucciones no encontradas: {RECONSTRUCCIONES_DIR}")
         return txts
 
     for art_dir in sorted(RECONSTRUCCIONES_DIR.iterdir()):
-        if not art_dir.is_dir():
-            continue
-        if not art_dir.name.startswith("Articulos_"):
+        if not art_dir.is_dir() or not art_dir.name.startswith("Articulos_"):
             continue
 
-        doc_id = art_dir.name[len("Articulos_"):]
-        if not DOC_ID_RE.match(doc_id):
+        parent_doc_id = art_dir.name[len("Articulos_"):]
+        if not DOC_ID_RE.match(parent_doc_id):
             continue
 
-        txt_files = sorted(
-            [f for f in art_dir.iterdir() if f.suffix == ".txt"],
-            key=_sort_key,
-        )
-        if txt_files:
-            txts[doc_id] = txt_files
+        for txt_file in sorted(art_dir.iterdir()):
+            if not txt_file.name.endswith(".pdf.txt"):
+                continue
+            # ohcbh_cf_erl1_001.pdf.txt → page_stem = ohcbh_cf_erl1_001
+            page_stem = txt_file.name[: -len(".pdf.txt")]
+            txts[page_stem] = (txt_file, parent_doc_id)
 
     return txts
 
@@ -184,17 +165,13 @@ def load_csv_metadata() -> dict[str, dict]:
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def concat_texts(txt_files: list[Path]) -> str:
-    """Lee y concatena los archivos de texto en orden de página."""
-    parts = []
-    for f in txt_files:
-        try:
-            text = f.read_text(encoding="utf-8", errors="replace").strip()
-            if text:
-                parts.append(text)
-        except OSError as exc:
-            print(f"  [WARN] No se pudo leer {f.name}: {exc}")
-    return "\n\n".join(parts)
+def concat_texts(txt_file: Path) -> str:
+    """Lee el archivo de texto de una página."""
+    try:
+        return txt_file.read_text(encoding="utf-8", errors="replace").strip()
+    except OSError as exc:
+        print(f"  [WARN] No se pudo leer {txt_file.name}: {exc}")
+        return ""
 
 
 def _parse_year(raw: str) -> int | None:
@@ -250,19 +227,21 @@ def run(dry_run: bool = False, force: bool = False, solo_pdf: bool = False) -> N
         metadata = load_csv_metadata()
         print(f"  {len(metadata)} documentos encontrados en el CSV.")
 
-        print("\nEscaneando PDFs...")
+        print("\nEscaneando PDFs página a página...")
         pdfs = scan_pdfs()
-        print(f"  {len(pdfs)} PDFs encontrados en data/pdfs/.")
+        print(f"  {len(pdfs)} páginas PDF encontradas en data/pdfs/.../Articulos_.../")
 
         print("\nEscaneando textos reconstruidos...")
         txts = scan_reconstrucciones()
-        print(f"  {len(txts)} carpetas de texto encontradas en Reconstrucciones_qwen_deepseek/.")
+        print(f"  {len(txts)} páginas TXT encontradas en Reconstrucciones_qwen_deepseek/.")
 
-        # ── Match ──────────────────────────────────────────────────────────────
+        # ── Match página a página ──────────────────────────────────────────────
+        # pdfs:  {page_stem: (rel_path, parent_doc_id)}
+        # txts:  {page_stem: (txt_path, parent_doc_id)}
         matched: dict[str, tuple] = {
-            doc_id: (pdfs[doc_id], txts[doc_id])
-            for doc_id in pdfs
-            if doc_id in txts
+            stem: (pdfs[stem][0], pdfs[stem][1], txts[stem][0])
+            for stem in pdfs
+            if stem in txts
         }
         pdf_only = sorted(set(pdfs) - set(txts))   # PDF sin TXT aún
         txt_only = sorted(set(txts) - set(pdfs))   # TXT sin PDF (inesperado)
@@ -271,24 +250,22 @@ def run(dry_run: bool = False, force: bool = False, solo_pdf: bool = False) -> N
         print(f"  ✓ Emparejados (PDF + TXT): {len(matched)}")
         print(f"  ⏳ Solo PDF (TXT pendiente): {len(pdf_only)}")
         if txt_only:
-            print(f"  ⚠  Solo TXT (sin PDF): {len(txt_only)} — {txt_only}")
+            print(f"  ⚠  Solo TXT (sin PDF): {len(txt_only)} — {txt_only[:5]}")
         print("─" * 60)
 
         if dry_run:
             print("\n[DRY-RUN] No se modificará la base de datos.")
-            print("\nDocumentos que se insertarían/actualizarían:")
-            for doc_id in sorted(matched):
-                pdf_rel, txts_list = matched[doc_id]
-                row = metadata.get(doc_id, {})
-                title = (row.get("Título") or "").strip() or doc_id
-                print(f"  {doc_id:30s}  PDF={str(pdf_rel):<60s}  TXTs={len(txts_list)}  Título={title[:50]!r}")
+            print("\nEjemplo de páginas que se insertarían/actualizarían (primeras 10):")
+            for stem in sorted(matched)[:10]:
+                rel_path, parent_id, txt_path = matched[stem]
+                row = metadata.get(parent_id, {})
+                title = (row.get("Título") or "").strip() or parent_id
+                print(f"  {stem:40s}  padre={parent_id}  título={title[:40]!r}")
             if solo_pdf:
-                print(f"\nDocumentos solo-PDF que se insertarían (sin texto aún):")
-                for doc_id in pdf_only:
-                    pdf_rel = pdfs[doc_id]
-                    row = metadata.get(doc_id, {})
-                    title = (row.get("Título") or "").strip() or doc_id
-                    print(f"  {doc_id:30s}  PDF={str(pdf_rel)}")
+                print(f"\nPáginas solo-PDF que se insertarían (primeras 5):")
+                for stem in pdf_only[:5]:
+                    rel_path, parent_id = pdfs[stem]
+                    print(f"  {stem:40s}  PDF={str(rel_path)}")
             return
 
         inserted = 0
@@ -296,29 +273,29 @@ def run(dry_run: bool = False, force: bool = False, solo_pdf: bool = False) -> N
         skipped = 0
         errors = 0
 
-        def _process(doc_id: str, pdf_rel: Path, txt_files: list[Path] | None) -> None:
+        def _process(page_stem: str, pdf_rel: Path, parent_doc_id: str,
+                     txt_path: Path | None) -> None:
             nonlocal inserted, updated, skipped, errors
             try:
-                existing = Document.query.filter_by(doc_id=doc_id).first()
+                existing = Document.query.filter_by(doc_id=page_stem).first()
 
                 if existing and not force:
                     skipped += 1
                     return
 
-                # Texto OCR concatenado
+                # Texto OCR de la página
                 ocr_text = None
-                if txt_files:
-                    raw = concat_texts(txt_files)
+                if txt_path:
+                    raw = concat_texts(txt_path)
                     ocr_text = clean_ocr_text(raw) if raw else None
 
-                # Metadatos del CSV
-                row = metadata.get(doc_id, {})
+                # Metadatos del CSV (heredados del documento padre)
+                row = metadata.get(parent_doc_id, {})
                 fields = _metadata_fields(row)
                 if not fields["title"]:
-                    fields["title"] = doc_id
+                    fields["title"] = parent_doc_id
 
                 if existing:
-                    # Actualiza campos — con --force sobreescribe todo
                     if force or not existing.ocr_text:
                         existing.ocr_text = ocr_text
                     if force or not existing.pdf_filename:
@@ -346,10 +323,10 @@ def run(dry_run: bool = False, force: bool = False, solo_pdf: bool = False) -> N
                         existing.century = fields["century"]
                     db.session.commit()
                     updated += 1
-                    print(f"  [UPD] {doc_id}")
+                    print(f"  [UPD] {page_stem}")
                 else:
                     doc = Document(
-                        doc_id=doc_id,
+                        doc_id=page_stem,
                         pdf_filename=str(pdf_rel),
                         ocr_text=ocr_text,
                         language="español",
@@ -358,34 +335,35 @@ def run(dry_run: bool = False, force: bool = False, solo_pdf: bool = False) -> N
                     db.session.add(doc)
                     db.session.commit()
                     inserted += 1
-                    print(f"  [NEW] {doc_id}")
+                    print(f"  [NEW] {page_stem}")
 
             except Exception as exc:
                 db.session.rollback()
                 errors += 1
-                print(f"  [ERR] {doc_id}: {exc}")
+                print(f"  [ERR] {page_stem}: {exc}")
 
-        # ── Procesar documentos emparejados (PDF + TXT) ────────────────────────
-        print("\nProcesando documentos emparejados...")
-        for doc_id in sorted(matched):
-            pdf_rel, txt_files = matched[doc_id]
-            _process(doc_id, pdf_rel, txt_files)
+        # ── Procesar páginas emparejadas (PDF + TXT) ──────────────────────────
+        print("\nProcesando páginas emparejadas...")
+        for stem in sorted(matched):
+            pdf_rel, parent_id, txt_path = matched[stem]
+            _process(stem, pdf_rel, parent_id, txt_path)
 
         # ── Procesar solo-PDF si se solicitó ──────────────────────────────────
         if solo_pdf and pdf_only:
-            print(f"\nProcesando {len(pdf_only)} documentos solo-PDF (sin texto aún)...")
-            for doc_id in pdf_only:
-                _process(doc_id, pdfs[doc_id], None)
+            print(f"\nProcesando {len(pdf_only)} páginas solo-PDF (sin texto aún)...")
+            for stem in pdf_only:
+                pdf_rel, parent_id = pdfs[stem]
+                _process(stem, pdf_rel, parent_id, None)
 
         # ── Resumen ───────────────────────────────────────────────────────────
         print("\n" + "=" * 60)
-        print(f"RESUMEN")
-        print(f"  Insertados:  {inserted}")
-        print(f"  Actualizados: {updated}")
+        print("RESUMEN")
+        print(f"  Insertados:             {inserted}")
+        print(f"  Actualizados:           {updated}")
         print(f"  Omitidos (ya existían): {skipped}")
-        print(f"  Errores: {errors}")
+        print(f"  Errores:                {errors}")
         if pdf_only and not solo_pdf:
-            print(f"\n  {len(pdf_only)} PDFs sin texto todavía (usa --solo-pdf para cargarlos sin TXT).")
+            print(f"\n  {len(pdf_only)} páginas sin texto todavía (usa --solo-pdf para cargarlas sin TXT).")
 
 
 # ──────────────────────────────────────────────────────────────────────────────

@@ -23,11 +23,13 @@ Los textos reconstruidos (OCR + limpieza + reconstrucción con IA) se encuentran
 
 ```
 ohcbh_cf_erlXXX/
-    PDF_ohcbh_cf_erlXXX/
-        ohcbh_cf_erlXXX_bn.pdf   ← archivo principal (blanco y negro)
+    Articulos_ohcbh_cf_erlXXX/
+        ohcbh_cf_erlXXX_001.pdf   ← PDF de la página 1
+        ohcbh_cf_erlXXX_002.pdf   ← PDF de la página 2
+        ...
 ```
 
-Cada carpeta de primer nivel (`ohcbh_cf_erlXXX`) corresponde a **un documento**. El PDF a servir está siempre dentro del subdirectorio `PDF_ohcbh_cf_erlXXX/`.
+Cada carpeta `Articulos_ohcbh_cf_erlXXX/` contiene los PDFs de cada **página individual** del documento. Cada página es un archivo `.pdf` independiente.
 
 ### Textos reconstruidos (`Reconstrucciones_qwen_deepseek/`)
 
@@ -45,28 +47,19 @@ Cada carpeta agrupa las páginas de **un documento**; los `.txt` se concatenan e
 
 ## Lógica del emparejamiento
 
-El identificador de documento se extrae directamente del nombre de la carpeta:
+El emparejamiento es **página a página**. La clave de match es el **stem del nombre de archivo** (sin extensión):
 
-| Fuente | Nombre de carpeta / archivo | ID extraído |
-|--------|----------------------------|-------------|
-| PDFs | `ohcbh_cf_erl1` | `ohcbh_cf_erl1` |
-| Reconstrucciones | `Articulos_ohcbh_cf_erl1` → eliminar `Articulos_` | `ohcbh_cf_erl1` |
-| CSV | `Nombre viejo` = `ohcbh_cf_erl1_bn.pdf` → eliminar `_bn.pdf` | `ohcbh_cf_erl1` |
+| Fuente | Archivo | Clave de match |
+|--------|---------|----------------|
+| PDF | `Articulos_ohcbh_cf_erl1/ohcbh_cf_erl1_001.pdf` | `ohcbh_cf_erl1_001` |
+| TXT | `Articulos_ohcbh_cf_erl1/ohcbh_cf_erl1_001.pdf.txt` | `ohcbh_cf_erl1_001` |
 
-El match es **por igualdad de ID** (string). No se requiere heurística difusa.
+- Del PDF: `page_stem = pdf_file.stem` (Python) — elimina `.pdf`
+- Del TXT: `page_stem = txt_name[:-len('.pdf.txt')]` — elimina `.pdf.txt`
 
-### Casos especiales resueltos
+Ambos lados producen el mismo identificador de página. No se requiere heurística difusa.
 
-Algunos PDFs tienen nombres atípicos (sin sufijo `_bn` o con letras en minúscula vs. mayúscula en el ID):
-
-| ID de carpeta | PDF real encontrado | Problema |
-|--------------|---------------------|---------|
-| `ohcbh_cf_erl104` | `ohcbh_cf_erl104.pdf` | Sin sufijo `_bn` |
-| `ohcbh_cf_erl14A` | `ohcbh_cf_erl14a_bn.pdf` | Letra en minúscula |
-| `ohcbh_cf_erl14B` | `ohcbh_cf_erl14b_bn.pdf` | Letra en minúscula |
-| `ohcbh_cf_erl158` | `ohcbh_cf_erl158.pdf` | Sin sufijo `_bn` |
-
-El escáner de PDFs prueba candidatos en este orden: `{id}_bn.pdf` → `{id}.pdf` → `{id.lower()}_bn.pdf` → `{id.lower()}.pdf` → cualquier `.pdf` único en el directorio.
+El `doc_id` en la base de datos es el identificador de página (`ohcbh_cf_erl1_001`). Los metadatos se heredan del **documento padre** (`ohcbh_cf_erl1`) consultando el CSV por nombre de carpeta.
 
 ---
 
@@ -90,17 +83,17 @@ Mapeo de columnas CSV → campos del modelo `Document`:
 
 ---
 
-## Resultados del dry-run (12 jun 2026)
+## Resultados del dry-run (13 jun 2026)
 
 ```
-PDFs encontrados en data/pdfs/         : 224
-Carpetas TXT en Reconstrucciones/      : 73
-────────────────────────────────────────
-✓ Emparejados (PDF + TXT)             : 73
-⏳ Solo PDF (TXT aún en proceso)       : 151
+Páginas PDF en data/pdfs/.../Articulos_.../ : 15584
+Páginas TXT en Reconstrucciones/            :  4305
+────────────────────────────────────────────────────
+✓ Emparejadas (PDF + TXT)                  :  4305
+⏳ Solo PDF (TXT aún en proceso)            : 11279
 ```
 
-Los 73 documentos ya procesados están listos para cargarse. Los 151 restantes se cargarán progresivamente usando `--solo-pdf` (solo PDF, sin texto) o cuando finalice el procesamiento de Reconstrucciones.
+Las 4305 páginas ya reconstruidas están listas para cargarse. Las 11279 restantes se cargarán progresivamente cuando finalice el procesamiento de `Reconstrucciones_qwen_deepseek/`.
 
 ---
 
@@ -151,24 +144,26 @@ python load_from_reconstrucciones.py --force
 ## Descripción paso a paso del script
 
 ### 1. `scan_pdfs()` — Escaneo de PDFs
-Recorre `proyect/data/pdfs/` buscando carpetas con patrón `ohcbh_cf_erlXXX`. Para cada una, entra al subdirectorio `PDF_{id}/` y localiza el PDF con tolerancia a variaciones de nombre. Devuelve `{doc_id → ruta_relativa}`.
+Recorre `proyect/data/pdfs/ohcbh_cf_erlXXX/Articulos_ohcbh_cf_erlXXX/` para cada documento. Recopila cada `.pdf` individual como una entrada `{page_stem → (ruta_relativa, parent_doc_id)}`. El `parent_doc_id` es el nombre de la carpeta padre (`ohcbh_cf_erlXXX`).
 
 ### 2. `scan_reconstrucciones()` — Escaneo de textos
-Recorre `Reconstrucciones_qwen_deepseek/` buscando carpetas `Articulos_ohcbh_cf_erlXXX`. Extrae el doc_id, lista todos los `.txt` y los ordena por número de página (extraído con regex del nombre). Devuelve `{doc_id → [lista de rutas]}`.
+Recorre `Reconstrucciones_qwen_deepseek/Articulos_ohcbh_cf_erlXXX/`. Para cada `.pdf.txt` extrae el `page_stem` eliminando el sufijo `.pdf.txt`. Devuelve `{page_stem → (ruta_al_txt, parent_doc_id)}`.
 
 ### 3. `load_csv_metadata()` — Carga de metadatos
-Lee el CSV buscando filas cuyo `Nombre viejo` sea `{id}_bn.pdf`. Toma la primera fila por documento y construye `{doc_id → dict de metadatos}`. El CSV tiene ~1M filas (una por imagen/página), de ahí la selección específica por `_bn.pdf`.
+Lee el CSV buscando filas cuyo `Nombre viejo` sea `{id}_bn.pdf`. Toma la primera fila por documento y construye `{parent_doc_id → dict de metadatos}`. El CSV tiene ~1M filas (una por imagen/página), de ahí la selección específica por `_bn.pdf`.
 
 ### 4. Match
-`matched = {id: (pdf_rel, txts)} para id in pdfs si id in txts`
+`matched = {page_stem: (pdf_rel, parent_id, txt_path)} para page_stem in pdfs si page_stem in txts`
 
-Separado de: `pdf_only` (PDF sin TXT aún) y `txt_only` (TXT sin PDF, anomalía).
+Separado de: `pdf_only` (página sin TXT aún) y `txt_only` (TXT sin PDF, anomalía).
 
-### 5. `concat_texts()` — Concatenación
-Lee los `.txt` en orden y los une con `\n\n`. Luego aplica `clean_ocr_text()` de la utilidad existente de la app.
+### 5. `concat_texts()` — Lectura del texto
+Lee el único `.txt` correspondiente a la página. Luego aplica `clean_ocr_text()` de la utilidad existente de la app.
 
 ### 6. Carga en DB (Flask app context)
-Para cada documento del match:
+Para cada página del match:
+- `doc_id` = `page_stem` (p.ej. `ohcbh_cf_erl1_001`)
+- Metadatos heredados del documento padre mediante el CSV.
 - Si **no existe** → crea `Document` con todos los campos y hace `db.session.add()`.
 - Si **existe** y `--force` → actualiza los campos individuales según estén vacíos o no.
 - Hace `db.session.commit()` tras cada inserción para evitar pérdida total en caso de error.

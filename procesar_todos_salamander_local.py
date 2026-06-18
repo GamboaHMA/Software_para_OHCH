@@ -250,13 +250,17 @@ def check_model():
 # ══════════════════════════════════════════════════════════════════════════════
 # ── Bucle principal ───────────────────────────────────────────────────────────
 # ══════════════════════════════════════════════════════════════════════════════
-def main(hasta=None):
+def main(desde=None, hasta=None):
     stats = {"procesados": 0, "saltados": 0, "errores": 0, "tiempo_total": 0.0}
 
     all_txt = sorted(INPUT_ROOT.rglob("*.txt"))
-    if hasta is not None:
-        all_txt = all_txt[:hasta]
-    total   = len(all_txt)
+    if desde is None:
+        desde = 0
+    if hasta is None:
+        hasta = len(all_txt)
+    all_txt = all_txt[desde:hasta]
+    total = len(all_txt)
+
 
     print(f"Archivos encontrados: {total}\n", flush=True)
 
@@ -354,6 +358,17 @@ if __name__ == "__main__":
         ),
     )
     parser.add_argument(
+        "--desde",
+        type=int,
+        default=0,
+        metavar="M",
+        help=(
+            "Empezar desde el documento número M de la lista global ordenada "
+            "(índice 0-based, inclusivo). "
+            "Ej: --desde 1000"
+        ),
+    )
+    parser.add_argument(
         "--hasta",
         type=int,
         default=None,
@@ -399,4 +414,4 @@ if __name__ == "__main__":
     OLLAMA_OPTIONS["num_ctx"] = alias["num_ctx"]     if alias else OLLAMA_OPTIONS["num_ctx"]
     MAX_CHARS_PER_QUERY       = alias["max_chars"]   if alias else MAX_CHARS_PER_QUERY
 
-    main(args.hasta)
+    main(args.desde, args.hasta)
