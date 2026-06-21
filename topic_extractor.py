@@ -1,9 +1,9 @@
 """
-Etiquetado automático de temas con Perplexity AI (interfaz web).
+Etiquetado automático de temas con DeepSeek Chat (interfaz web).
 
 Toma la salida de HistoricalTopicModeler y genera una etiqueta semántica
-por tema interactuando con perplexity.ai vía Selenium/undetected-chromedriver,
-igual que procesar_todos_perplexity.py.  No requiere API key.
+por tema interactuando con chat.deepseek.com vía Selenium/undetected-chromedriver,
+igual que procesar_todos_deepseek.py.  No requiere API key.
 
 Dos variantes:
   top_words  — input: las palabras más relevantes del tema (LDA/NMF)
@@ -31,7 +31,7 @@ import time
 from pathlib import Path
 
 from topic_modeling import DEFAULT_CORPUS_DIR, HistoricalTopicModeler
-from procesar_todos_perplexity import PerplexityBot
+from procesar_todos_deepseek import DeepSeekBot
 
 # Fragmento máximo (caracteres) por documento en la variante top_docs
 MAX_FRAGMENT_CHARS = 800
@@ -91,7 +91,7 @@ Responde ÚNICAMENTE con la etiqueta, sin puntuación final ni explicación adic
 class TopicLabeler:
     """
     Genera etiquetas semánticas para los temas descubiertos por
-    HistoricalTopicModeler interactuando con perplexity.ai vía Selenium.
+    HistoricalTopicModeler interactuando con chat.deepseek.com vía Selenium.
 
     Parámetros
     ----------
@@ -133,7 +133,7 @@ class TopicLabeler:
         self.fragment_chars = fragment_chars
         self.delay = delay
 
-        self._bot: PerplexityBot | None = None
+        self._bot: DeepSeekBot | None = None
 
     # ------------------------------------------------------------------
     # Helpers de extracción
@@ -183,10 +183,10 @@ class TopicLabeler:
     # ------------------------------------------------------------------
 
     def start_browser(self) -> None:
-        """Abre el navegador, navega a Perplexity y espera a que el usuario
-        inicie sesión si es necesario (igual que en procesar_todos_perplexity)."""
-        print("[INFO] Abriendo navegador en perplexity.ai…")
-        self._bot = PerplexityBot(headless=False)
+        """Abre el navegador, navega a DeepSeek y espera a que el usuario
+        inicie sesión si es necesario (igual que en procesar_todos_deepseek)."""
+        print("[INFO] Abriendo navegador en chat.deepseek.com…")
+        self._bot = DeepSeekBot(headless=False)
         self._bot.start()
         self._bot.open_home()
         print("[INFO] Navegador listo. Continuando…")
@@ -202,7 +202,7 @@ class TopicLabeler:
     # ------------------------------------------------------------------
 
     def _query(self, prompt: str) -> str:
-        """Envía un prompt a Perplexity vía el navegador y devuelve la respuesta."""
+        """Envía un prompt a DeepSeek vía el navegador y devuelve la respuesta."""
         if self._bot is None:
             raise RuntimeError("Llama start_browser() antes de etiquetar.")
         self._bot.new_chat()
@@ -336,12 +336,12 @@ class TopicLabeler:
 
 def build_arg_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
-        description="Etiquetado automático de temas con Perplexity AI (web)."
+        description="Etiquetado automático de temas con DeepSeek Chat (web)."
     )
     p.add_argument(
         "--corpus-dir",
         default=None,
-        help="Carpeta raíz con los .txt (default: Reconstrucciones_perplexity)",
+        help="Carpeta raíz con los .txt (default: Reconstrucciones_qwen_deepseek)",
     )
     p.add_argument(
         "--n-topics",

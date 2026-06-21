@@ -8,7 +8,7 @@ Uso rápido:
     python topic_modeling.py
 
 Opciones:
-    --corpus-dir   Ruta a la carpeta raíz de los documentos (default: Reconstrucciones_perplexity)
+    --corpus-dir   Ruta a la carpeta raíz de los documentos (default: Reconstrucciones_qwen_deepseek)
     --n-topics     Número de temas a descubrir (default: 10)
     --method       Algoritmo: lda | nmf  (default: lda)
     --n-words      Palabras por tema al imprimir resultados (default: 15)
@@ -19,6 +19,7 @@ import argparse
 import csv
 import glob
 import os
+import pickle
 import re
 from pathlib import Path
 
@@ -31,7 +32,8 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 # ---------------------------------------------------------------------------
 
 BASE_DIR = Path(__file__).parent
-DEFAULT_CORPUS_DIR = BASE_DIR / "Reconstrucciones_perplexity"
+DEFAULT_CORPUS_DIR = BASE_DIR / "Reconstrucciones_qwen_deepseek"
+CACHE_DIR = BASE_DIR / ".cache"
 
 # Stopwords adicionales para español histórico (siglos XIX-XX)
 STOPWORDS_EXTRA = {
@@ -43,7 +45,7 @@ STOPWORDS_EXTRA = {
     "como", "que", "quien", "cual", "cuyo", "cuya",
     "allí", "allá", "aquí", "acá", "ahora", "antes", "después",
     "siempre", "nunca", "jamás", "ya", "aun",
-    "sr", "sra", "don", "doña",
+    "sr", "sra", "don", "doña", "él", 
 }
 
 
@@ -106,6 +108,18 @@ class HistoricalTopicModeler:
         print("[INFO] Cargando modelo de spaCy (es_core_news_sm)…")
         self._nlp = spacy.load("es_core_news_sm", disable=["parser", "ner"])
 
+    def _get_cache_path(self) -> Path:
+        """Devuelve la ruta del archivo .pkl de caché para este corpus."""
+        CACHE_DIR.mkdir(exist_ok=True)
+        safe_name = self.corpus_dir.name.replace(" ", "_")
+        return CACHE_DIR / f"{safe_name}_processed.pkl"
+
+    def _build_fingerprint(self) -> list:
+        """Huella del corpus: lista ordenada de (nombre, mtime) por archivo."""
+        return sorted(
+            (p.name, p.stat().st_mtime) for p in self.doc_paths
+        )
+
     # ------------------------------------------------------------------
     # Carga de documentos
     # ------------------------------------------------------------------
@@ -166,9 +180,29 @@ class HistoricalTopicModeler:
         return " ".join(tokens)
 
     def preprocess_corpus(self) -> None:
-        """Limpia y lematiza todos los documentos del corpus."""
+        """Limpia y lematiza todos los documentos del corpus.
+        Si existe un caché válido (.pkl) lo carga en su lugar."""
         if not self.raw_texts:
             raise RuntimeError("Primero llama load_corpus().")
+
+        cache_path = self._get_cache_path()
+        fingerprint = self._build_fingerprint()
+
+        # Intentar cargar desde caché
+        if cache_path.exists():
+            try:
+                with cache_path.open("rb") as f:
+                    cached = pickle.load(f)
+                if cached.get("fingerprint") == fingerprint:
+                    self.processed_texts = cached["processed_texts"]
+                    print(
+                        f"[INFO] Preprocesamiento cargado desde caché: {cache_path}"
+                    )
+                    return
+                else:
+                    print("[INFO] Caché desactualizado (corpus cambió), reprocesando…")
+            except Exception as exc:
+                print(f"[WARN] No se pudo leer el caché: {exc}. Reprocesando…")
 
         print("[INFO] Preprocesando documentos…")
         self.processed_texts = []
@@ -178,6 +212,18 @@ class HistoricalTopicModeler:
             self.processed_texts.append(lemmatized)
             if i % 10 == 0 or i == len(self.raw_texts):
                 print(f"  {i}/{len(self.raw_texts)} documentos procesados")
+
+        # Guardar caché
+        try:
+            with cache_path.open("wb") as f:
+                pickle.dump(
+                    {"fingerprint": fingerprint, "processed_texts": self.processed_texts},
+                    f,
+                    protocol=pickle.HIGHEST_PROTOCOL,
+                )
+            print(f"[INFO] Preprocesamiento guardado en caché: {cache_path}")
+        except Exception as exc:
+            print(f"[WARN] No se pudo guardar el caché: {exc}")
 
     # ------------------------------------------------------------------
     # Vectorización y modelado
@@ -325,13 +371,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--corpus-dir",
         default=str(DEFAULT_CORPUS_DIR),
-        help="Carpeta raíz con los .txt (default: Reconstrucciones_perplexity)",
+        help="Carpeta raíz con los .txt (default: Reconstrucciones_qwen_deepseek)",
     )
     p.add_argument(
         "--n-topics",
         type=int,
         default=10,
-        help="Número de temas (default: 10)",
+        help="Número de temas (default: 10). Ignorado si se usa --desde.",
     )
     p.add_argument(
         "--method",
@@ -348,7 +394,28 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--output",
         default=None,
-        help="Ruta CSV para guardar doc→tema (opcional)",
+        help="Ruta CSV para guardar doc→tema (opcional). Ignorado si se usa --desde.",
+    )
+    p.add_argument(
+        "--desde",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Inicio del rango de temas para experimentación (ej: 5).",
+    )
+    p.add_argument(
+        "--hasta",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Fin del rango de temas para experimentación, inclusivo (ej: 20).",
+    )
+    p.add_argument(
+        "--unit",
+        type=int,
+        default=1,
+        metavar="U",
+        help="Paso del iterador de temas (default: 1). Ej: --desde 5 --hasta 20 --unit 5",
     )
     return p
 
@@ -356,17 +423,53 @@ def build_arg_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = build_arg_parser().parse_args()
 
-    modeler = HistoricalTopicModeler(
-        corpus_dir=args.corpus_dir,
-        n_topics=args.n_topics,
-        method=args.method,
-        n_words=args.n_words,
-    )
+    # ── Modo experimentación: iterar sobre rango de n_topics ──────────────────
+    if args.desde is not None:
+        if args.hasta is None or args.hasta < args.desde:
+            import sys
+            print("[ERROR] --hasta debe ser >= --desde", file=sys.stderr)
+            sys.exit(1)
 
-    modeler.fit()
-    modeler.print_topics()
-    modeler.topic_distribution_summary()
-    modeler.print_doc_topics(n=30)
+        results_dir = Path("Topic_results")
+        results_dir.mkdir(exist_ok=True)
 
-    if args.output:
-        modeler.save_doc_topics(args.output)
+        n_values = list(range(args.desde, args.hasta + 1, args.unit))
+        print(
+            f"[INFO] Modo experimentación: n_topics ∈ {n_values} "
+            f"(desde={args.desde}, hasta={args.hasta}, unit={args.unit})"
+        )
+
+        for n in n_values:
+            print(f"\n{'='*60}")
+            print(f"  EXPERIMENTO: n_topics = {n}")
+            print(f"{'='*60}")
+
+            modeler = HistoricalTopicModeler(
+                corpus_dir=args.corpus_dir,
+                n_topics=n,
+                method=args.method,
+                n_words=args.n_words,
+            )
+            modeler.fit()
+            modeler.print_topics()
+            modeler.topic_distribution_summary()
+
+            out_path = results_dir / f"{n}_topics_result.csv"
+            modeler.save_doc_topics(str(out_path))
+
+    # ── Modo normal: ejecución única con n_topics fijo ────────────────────────
+    else:
+        modeler = HistoricalTopicModeler(
+            corpus_dir=args.corpus_dir,
+            n_topics=args.n_topics,
+            method=args.method,
+            n_words=args.n_words,
+        )
+
+        modeler.fit()
+        modeler.print_topics()
+        modeler.topic_distribution_summary()
+        modeler.print_doc_topics(n=30)
+
+        if args.output:
+            modeler.save_doc_topics(args.output)
