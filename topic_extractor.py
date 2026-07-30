@@ -212,15 +212,36 @@ class TopicLabeler:
     # API pública
     # ------------------------------------------------------------------
 
-    def label_all_topics(self) -> list[dict]:
+    def label_all_topics(self, output_path: str | None = None) -> list[dict]:
         """
         Genera una etiqueta por tema usando la variante configurada en
         label_method ('top_words' o 'top_docs').
 
+        Si output_path se proporciona, crea el JSON al inicio con labels
+        vacíos y lo actualiza tras cada consulta. Si el archivo ya existe,
+        reanuda desde donde se dejó (omite temas ya etiquetados).
+
         Devuelve lista de dicts: topic_id, label, top_words.
         """
         n_topics = self.modeler.n_topics
-        results = []
+
+        # Inicializar o reanudar desde JSON existente
+        if output_path and Path(output_path).exists():
+            with Path(output_path).open("r", encoding="utf-8") as f:
+                results = json.load(f)
+            print(f"[INFO] Reanudando desde archivo existente: {output_path}")
+        else:
+            results = [
+                {
+                    "topic_id": i + 1,
+                    "label": "",
+                    "top_words": self._get_top_words(i),
+                }
+                for i in range(n_topics)
+            ]
+            if output_path:
+                self.save_labels(results, output_path)
+                print(f"[INFO] JSON inicial creado en: {output_path}")
 
         print(
             f"[INFO] Etiquetando {n_topics} temas "
@@ -229,6 +250,16 @@ class TopicLabeler:
 
         for topic_idx in range(n_topics):
             topic_num = topic_idx + 1
+            entry = results[topic_idx]
+
+            # Si ya tiene etiqueta, imprimir y continuar
+            if entry["label"]:
+                print(
+                    f"  Tema {topic_num:>2}/{n_topics}… "
+                    f"(ya etiquetado) \"{entry['label']}\""
+                )
+                continue
+
             print(f"  Tema {topic_num:>2}/{n_topics}… ", end="", flush=True)
 
             if self.label_method == "top_words":
@@ -241,62 +272,91 @@ class TopicLabeler:
             except Exception as exc:
                 label = f"[ERROR: {exc}]"
 
-            top_words = self._get_top_words(topic_idx)
-            results.append(
-                {
-                    "topic_id": topic_num,
-                    "label": label,
-                    "top_words": top_words,
-                }
-            )
+            entry["label"] = label
             print(f'"{label}"')
+
+            if output_path:
+                self.save_labels(results, output_path)
 
             if topic_idx < n_topics - 1:
                 time.sleep(self.delay)
 
         return results
 
-    def label_all_both(self) -> list[dict]:
+    def label_all_both(self, output_path: str | None = None) -> list[dict]:
         """
         Corre ambas variantes (top_words y top_docs) y devuelve los resultados
         con label_top_words y label_top_docs para comparación directa.
 
+        Si output_path se proporciona, crea el JSON al inicio con labels
+        vacíos y lo actualiza tras cada consulta. Si el archivo ya existe,
+        reanuda desde donde se dejó (omite temas ya etiquetados en cada variante).
+
         Devuelve lista de dicts: topic_id, label_top_words, label_top_docs, top_words.
         """
         n_topics = self.modeler.n_topics
-        results = []
+
+        # Inicializar o reanudar desde JSON existente
+        if output_path and Path(output_path).exists():
+            with Path(output_path).open("r", encoding="utf-8") as f:
+                results = json.load(f)
+            print(f"[INFO] Reanudando desde archivo existente: {output_path}")
+        else:
+            results = [
+                {
+                    "topic_id": i + 1,
+                    "label_top_words": "",
+                    "label_top_docs": "",
+                    "top_words": self._get_top_words(i),
+                }
+                for i in range(n_topics)
+            ]
+            if output_path:
+                self.save_labels(results, output_path)
+                print(f"[INFO] JSON inicial creado en: {output_path}")
 
         print(f"[INFO] Etiquetando {n_topics} temas con AMBAS variantes…")
 
         for topic_idx in range(n_topics):
             topic_num = topic_idx + 1
-            top_words = self._get_top_words(topic_idx)
+            entry = results[topic_idx]
+            changed = False
 
             # — Variante top_words —
-            print(f"  Tema {topic_num:>2}/{n_topics} [top_words]… ", end="", flush=True)
-            try:
-                label_tw = self._query(self._build_prompt_top_words(topic_idx))
-            except Exception as exc:
-                label_tw = f"[ERROR: {exc}]"
-            print(f'"{label_tw}"')
-            time.sleep(self.delay)
+            if entry["label_top_words"]:
+                print(
+                    f"  Tema {topic_num:>2}/{n_topics} [top_words]… "
+                    f"(ya etiquetado) \"{entry['label_top_words']}\""
+                )
+            else:
+                print(f"  Tema {topic_num:>2}/{n_topics} [top_words]… ", end="", flush=True)
+                try:
+                    label_tw = self._query(self._build_prompt_top_words(topic_idx))
+                except Exception as exc:
+                    label_tw = f"[ERROR: {exc}]"
+                entry["label_top_words"] = label_tw
+                changed = True
+                print(f'"{label_tw}"')
+                time.sleep(self.delay)
 
             # — Variante top_docs —
-            print(f"  Tema {topic_num:>2}/{n_topics} [top_docs]…  ", end="", flush=True)
-            try:
-                label_td = self._query(self._build_prompt_top_docs(topic_idx))
-            except Exception as exc:
-                label_td = f"[ERROR: {exc}]"
-            print(f'"{label_td}"')
+            if entry["label_top_docs"]:
+                print(
+                    f"  Tema {topic_num:>2}/{n_topics} [top_docs]…  "
+                    f"(ya etiquetado) \"{entry['label_top_docs']}\""
+                )
+            else:
+                print(f"  Tema {topic_num:>2}/{n_topics} [top_docs]…  ", end="", flush=True)
+                try:
+                    label_td = self._query(self._build_prompt_top_docs(topic_idx))
+                except Exception as exc:
+                    label_td = f"[ERROR: {exc}]"
+                entry["label_top_docs"] = label_td
+                changed = True
+                print(f'"{label_td}"')
 
-            results.append(
-                {
-                    "topic_id": topic_num,
-                    "label_top_words": label_tw,
-                    "label_top_docs": label_td,
-                    "top_words": top_words,
-                }
-            )
+            if output_path and changed:
+                self.save_labels(results, output_path)
 
             if topic_idx < n_topics - 1:
                 time.sleep(self.delay)
@@ -390,21 +450,31 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default=None,
         help="Ruta JSON para guardar etiquetas (opcional)",
     )
+    p.add_argument(
+        "--model",
+        default=None,
+        metavar="PKL",
+        help="Ruta a un .pkl guardado por topic_modeling.py. "
+             "Si se indica, omite el entrenamiento y carga el modelo directamente. "
+             "Ej: Topic_models/10_topics_lda.pkl",
+    )
     return p
 
 
 if __name__ == "__main__":
     args = build_arg_parser().parse_args()
 
-    corpus_dir = args.corpus_dir or DEFAULT_CORPUS_DIR
-
-    modeler = HistoricalTopicModeler(
-        corpus_dir=corpus_dir,
-        n_topics=args.n_topics,
-        method=args.method,
-        n_words=args.n_words,
-    )
-    modeler.fit()
+    if args.model:
+        modeler = HistoricalTopicModeler.load_model(args.model)
+    else:
+        corpus_dir = args.corpus_dir or DEFAULT_CORPUS_DIR
+        modeler = HistoricalTopicModeler(
+            corpus_dir=corpus_dir,
+            n_topics=args.n_topics,
+            method=args.method,
+            n_words=args.n_words,
+        )
+        modeler.fit()
     modeler.print_topics()
 
     labeler = TopicLabeler(
@@ -420,9 +490,9 @@ if __name__ == "__main__":
 
     try:
         if args.label_method == "both":
-            results = labeler.label_all_both()
+            results = labeler.label_all_both(output_path=args.output)
         else:
-            results = labeler.label_all_topics()
+            results = labeler.label_all_topics(output_path=args.output)
     finally:
         labeler.stop_browser()
 

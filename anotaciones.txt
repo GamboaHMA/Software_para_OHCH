@@ -1,0 +1,270 @@
+--- PÁGINA 1 ---
+TEXTO MARCADO: especial énfasis en su aplicación a documentos históricos. A partir del análisis crítico de
+seis contribuciones representativas publicadas entre 2019 y 2021, se identifican las corrientes
+COMENTARIO: y las mas actuales ? Una de las cosas que mas débil tienes son las referencias. En este caso te faltan referencias históricas y más recientes
+-----
+--- PÁGINA 2 ---
+TEXTO MARCADO: La literatura revisada revela tres corrientes de investigación principales que, aunque interco-
+nectadas, presentan enfoques, premisas y comunidades de práctica diferenciadas.
+COMENTARIO: O aumentas el volumen de texto o eliminas esta intro de sección. Extremadamente corta.
+-----
+--- PÁGINA 2 ---
+TEXTO MARCADO: OCR para impresos históricos basado en redes neuronales.
+COMENTARIO: esas son las únicas referencias para ocr con nn, los llm no son nn ?
+-----
+--- PÁGINA 2 ---
+TEXTO MARCADO: 1.1.1.
+Mapeo de las corrientes principales
+COMENTARIO: Muchas sub subsecciones en esta subseccion. Puedes eliminar todos los encabezados de sub subsecciones y queda un texto mas uniforme y legible
+-----
+--- PÁGINA 3 ---
+TEXTO MARCADO: 1.1.2.
+¿Que se tiene en la actualidad?
+1.1.2.1.
+Arquitecturas y motores OCR: de LSTM a Transformers
+El estado del arte en OCR para documentos históricos ha estado dominado po
+COMENTARIO: Patrón incorrecto, nunca poner dos títulos seguidos
+-----
+--- PÁGINA 4 ---
+TEXTO MARCADO: Métodos basados en proyección: técnicas tradicionales que segmentan basándose
+en perfiles de densidad de píxeles.
+Redes totalmente convolucionales (FCN): U-Net y ARU-Net para segmentación
+semántica de bloques y líneas .
+Herramientas especializadas: LAREX (integrado en OCR4all) que permite seg-
+mentación automática con corrección manual fina y clasificación de tipos de región
+COMENTARIO: Evita las enumeraciones y similares. Redacta esto mismo en formato de párrafo.
+-----
+--- PÁGINA 4 ---
+TEXTO MARCADO: Martinek et al.
+COMENTARIO: Faltan las referencias a las citas de abajo, fijate en el template de la facultad para las tesis
+-----
+--- PÁGINA 4 ---
+TEXTO MARCADO: consenso
+COMENTARIO: según quienes ?
+-----
+--- PÁGINA 4 ---
+TEXTO MARCADO: o/n
+COMENTARIO: Evita estos estilos
+-----
+--- PÁGINA 4 ---
+TEXTO MARCADO: mentación básica texto/no-texto hasta una distinción semántica fina (marginalia, notas al
+pie, etc.). La debilidad fundamental es la falta de conjuntos de datos de segmentación
+COMENTARIO: Desarrolla la idea en lugar de emplear ( )
+-----
+--- PÁGINA 5 ---
+TEXTO MARCADO: Preentrenamiento con datos sintéticos generados a partir de textos históricos.
+Transfer learning desde dominios cercanos (ej. Europeana Newspapers para segmen-
+tación).
+Ajuste fino con las pocas muestras reales disponibles.
+COMENTARIO: idem que arriba
+-----
+--- PÁGINA 6 ---
+TEXTO MARCADO: 1. Nivel de dependencia humana: manuales, semiautomáticos y automáticos.
+2. Extensión de información utilizada: aislada vs. dependiente del contexto.
+3. Modelos aplicados: desde diccionarios hasta redes neuronales y transformers .
+COMENTARIO: Enumeraciones
+-----
+--- PÁGINA 6 ---
+TEXTO MARCADO: El survey de Nguyen et al. p
+COMENTARIO: sin referencia
+-----
+--- PÁGINA 7 ---
+TEXTO MARCADO: OCR4all: herramienta open-source que integra un flujo completo (preprocesamiento,
+segmentación, reconocimiento y corrección) en una aplicación Docker, permitiendo a
+humanistas generar textos digitales de alta calidad sin conocimientos de programación
+. Su motor Calamari (basado en TensorFlow con CNN + LSTM) alcanza CER del
+0.155 % en el conjunto UW3, superando a OCRopus 1 (0.870 %), OCRopus 3 (0.436 %)
+y Tesseract 4 (0.397 %) .
+Transkribus: plataforma que ha experimentado un crecimiento explosivo: de 3 publi-
+caciones en 2015 a 112 en 2019, con presencia en 31 dominios disciplinares distintos .
+La investigación es mayoritariamente anglófona (68 %) pero con presencia significativa
+de otros idiomas, y su centro geográfico se sitúa en Europa .
+COMENTARIO: enumeraciones
+-----
+--- PÁGINA 8 ---
+TEXTO MARCADO: 1.2.1.
+Mapeo de las Corrientes Principales
+La literatura sobre postcorrección OCR puede agruparse en tres corrientes metodológicas
+principales, que no son mutuamente excluyentes pero responden a distintas concepciones del
+problema y a distintos niveles de disponibilidad de datos.
+COMENTARIO: Muy corto, valora si la otra recomendación en esta parte aplica
+-----
+--- PÁGINA 9 ---
+TEXTO MARCADO: (seq2seq, NMT y variantes)
+COMENTARIO: ( )
+-----
+--- PÁGINA 9 ---
+TEXTO MARCADO: (salida del OCR) y
+COMENTARIO: ( )
+-----
+--- PÁGINA 9 ---
+TEXTO MARCADO: self-training c
+COMENTARIO: trata de emplear vocablos en español
+-----
+--- PÁGINA 10 ---
+TEXTO MARCADO: 1.2.2.
+¿Qué se tiene en la actualidad?
+1.2.2.1.
+Detección de errores:
+La detección de errores ha evolucionado desde enfoques
+COMENTARIO: dos títulos seguidos
+-----
+--- PÁGINA 10 ---
+TEXTO MARCADO: búlgaro histórico,
+COMENTARIO: Busca documentación y literatura del español y sus variantes americanas
+-----
+--- PÁGINA 10 ---
+TEXTO MARCADO: real-word errors
+COMENTARIO: español
+-----
+--- PÁGINA 11 ---
+TEXTO MARCADO: run-on e incorrect split.
+COMENTARIO: español
+-----
+--- PÁGINA 11 ---
+TEXTO MARCADO: (i) l
+COMENTARIO: limitaciones importantes tales como: la primera, la segunda y la tercera
+-----
+--- PÁGINA 11 ---
+TEXTO MARCADO: truth.
+COMENTARIO: español
+-----
+--- PÁGINA 11 ---
+TEXTO MARCADO: (ainu, griko, yakkha, kwak’wala),
+COMENTARIO: ( )
+-----
+--- PÁGINA 11 ---
+TEXTO MARCADO: ((1)) i
+COMENTARIO: sobra
+-----
+--- PÁGINA 12 ---
+TEXTO MARCADO: 4×.
+COMENTARIO: redacta en lugar de emplear números y simbología
+-----
+--- PÁGINA 12 ---
+TEXTO MARCADO: (i) e
+COMENTARIO: sobra
+-----
+--- PÁGINA 12 ---
+TEXTO MARCADO: tiene complejidad O(n2)
+COMENTARIO: segun ?
+-----
+--- PÁGINA 13 ---
+TEXTO MARCADO: La literatura sobre topic modeling puede organizarse en tres corrientes principales que
+reflejan la evolución epistemológica y tecnológica del campo:
+COMENTARIO: corto
+-----
+--- PÁGINA 13 ---
+TEXTO MARCADO: Latent Semantic Analysis (LSA): basado en descomposición en valores singulares
+(SVD) de matrices término-documento. Aunque LSA "genera tópicos más significativos
+y diversos en comparación con el modelo de espacio vectorial tradicional"[Kumari et al.,
+2023], sufre de limitaciones interpretativas al no ofrecer una base probabilística sólida.
+Probabilistic Latent Semantic Analysis (pLSA): introduce un modelo generativo
+que "puede ofrecer un mejor rendimiento que LSA, ya que este enfoque utiliza un
+modelo probabilístico"[Kumari et al., 2023]. Sin embargo, pLSA adolece de problemas
+de sobreajuste al no ser un modelo generativo completo.
+Latent Dirichlet Allocation (LDA): propuesto por Blei et al. (2003), se ha con-
+vertido en "la técnica de topic modeling más extensamente utilizada"[Kumari et al.,
+2023]. LDA resuelve las limitaciones de pLSA al incorporar priors Dirichlet, permitiendo
+una inferencia bayesiana completa. Chauhan y Shah (2021) documentan más de 30
+extensiones del LDA, incluyendo modelos jerárquicos (hLDA), modelos de tópicos corre-
+lacionados (CTM), versiones multilingües y distribuidas, y variantes con incorporación
+de conocimiento previo.
+Non-negative Matrix Factorization (NMF): ofrece una alternativa algebraica que,
+COMENTARIO: viñetas
+-----
+--- PÁGINA 14 ---
+TEXTO MARCADO: Top2Vec (Angelov, 2020): combina embeddings documentales con reducción de di-
+mensionalidad (UMAP) y clustering (HDBSCAN), extrayendo tópicos a partir de la
+proximidad al centroide del clúster. "Top2Vec ofrece algunas ventajas en comparación
+con las técnicas tradicionales de topic modeling. Su rendimiento mejorado se atribuye en
+gran medida a su alejamiento de las representaciones convencionales de BoW"[Kumari
+et al., 2023].
+BERTopic (Grootendorst, 2022): propone una arquitectura en tres pasos (embeddings
+con SBERT, reducción con UMAP, clustering con HDBSCAN) y una innovación
+fundamental: el reemplazo de la selección por proximidad al centroide por un mecanismo
+basado en frecuencias ajustado por clúster (c-TF-IDF). Como señala su autor, "para
+superar la perspectiva basada en el centroide, desarrollamos una versión basada en
+clases de TF-IDF para extraer la representación del tópico de cada tópico"[Grootendorst,
+2022].
+COMENTARIO: viñetas
+-----
+--- PÁGINA 14 ---
+TEXTO MARCADO: Representantes clave: Angelov (2020), Grootendorst (2022).
+COMENTARIO: referencias en el texto, no fuera del mismo
+-----
+--- PÁGINA 14 ---
+TEXTO MARCADO: NTMs basados en VAE (Autoencoders Variacionales): constituyen la familia más
+extensa, permitiendo inferencia eficiente mediante gradientes automáticos.
+NTMs con aprendizaje contrastivo: mejoran la discriminación entre tópicos.
+14
+COMENTARIO: corto y con viñetas
+-----
+--- PÁGINA 15 ---
+TEXTO MARCADO: 1.3.2.
+Comparación entre los enfoques
+1.3.2.1.
+Evolución Metodológica: De la Co-ocurrencia Estadística a la Densidad
+Semántica
+COMENTARIO: títulos seguidos
+-----
+--- PÁGINA 15 ---
+TEXTO MARCADO: (LSA, LDA, NMF)
+COMENTARIO: ( )
+-----
+--- PÁGINA 17 ---
+TEXTO MARCADO: Métricas de generalización (perplejidad): aunque ampliamente utilizadas, "la perplejidad
+refleja de manera inexacta la calidad de los tópicos descubiertos, ya que a menudo contradice
+el juicio humano"[Wu et al., 2023].
+Métricas de coherencia semántica (C_V, C_npmi, PMI): miden el grado de utilidad e
+interpretabilidad de los tópicos [Kumari et al., 2023]. Sin embargo, Wu et al. (2023) señalan
+que las métricas de coherencia tienen problemas de consistencia en su implementación, y
+que el uso y la configuración de las métricas automáticas varían entre los artículos e incluso
+dentro de un mismo artículo, lo que impide la comparabilidad de los NTMs entre diferentes
+trabajos de investigación.
+Métricas de diversidad (TU, TR, TD): evalúan la variedad de palabras en los tópicos.
+Wu et al. (2023) identifican una limitación fundamental en estas métricas: ïgnoran el hecho
+de que diferentes tópicos pueden compartir naturalmente las mismas palabras debido a la
+polisemia". Por ejemplo, ’apple’ puede referirse a una fruta o a una empresa tecnológica,
+y estas instancias deberían considerarse diferentes tópicos. Para resolver este problema,
+proponen Topic Semantic-aware Diversity (TSD), que mide la unicidad de pares de
+palabras en lugar de palabras individuales, alcanzando una çorrelación promedio de 0.986
+con evaluaciones humanas", superando significativamente a las métricas tradicionales TU
+(0.957) y TD (0.957) [Wu et al., 2023].
+COMENTARIO: Estilo que puedes seguir en lugar de las viñetas
+-----
+--- PÁGINA 17 ---
+TEXTO MARCADO: emergente en la literatura
+COMENTARIO: cuantas referencias respaldan esto ?
+-----
+--- PÁGINA 18 ---
+TEXTO MARCADO: Salud y bioinformática: Meaney et al. (2023) "propusieron un marco para comparar
+diferentes tipos de técnicas de topic modeling, a saber, LDA, NMF, modelo de tópicos
+estructural (STM) y BERTopic utilizando datos de texto clínico de atención prima-
+ria"[Kumari et al., 2023]. También se reportan aplicaciones en "detección de subtipos
+de cáncer con LDA supervisado (survLDA), y análisis de firmas mutacionales con NMF
+y modelos bayesianos"[Kumari et al., 2023].
+Redes sociales y análisis de tendencias: los modelos basados en embeddings han
+demostrado "superioridad en textos cortos y ruidososçomo tweets y comentarios [Kumari
+et al., 2023]. Wu et al. (2023) documentan aplicaciones en ’análisis de desinformación
+sobre COVID-19’ [Song et al., 2021].
+Dominios no textuales: aunque menos explorados, Chauhan y Shah (2021) señalan
+aplicaciones en ’reconocimiento de acciones humanas en video’ y çlasificación de objetos
+en imágenes", aunque reconocen que "hay un amplio espacio disponible para llevar a
+cabo la investigación sobre conjuntos de datos no textuales".
+COMENTARIO: viñetas
+-----
+--- PÁGINA 18 ---
+TEXTO MARCADO: Un hallazgo relevante es que los modelos generalistas como ChatGPT no reemplazan a
+los algoritmos especializados en tareas de topic modeling. El modelo de filtrado semántico
+COMENTARIO: modelos de lenguaje generativos
+-----
+--- PÁGINA 18 ---
+TEXTO MARCADO: Los modelos basados en embeddings (Top2Vec, BERTopic, NTMs) ofrecen flexibilidad
+y escalabilidad superiores a los enfoques clásicos [Wu et al., 2023].
+La separación entre agrupamiento y representación en BERTopic permite ac-
+tualizar la representación temática sin re-calcular clústeres, una ventaja operativa
+significativa [Grootendorst, 2022].
+18
+COMENTARIO: viñetas
+-----

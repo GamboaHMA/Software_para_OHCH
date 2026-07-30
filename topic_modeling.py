@@ -34,6 +34,7 @@ from sklearn.feature_extraction.text import CountVectorizer, TfidfVectorizer
 BASE_DIR = Path(__file__).parent
 DEFAULT_CORPUS_DIR = BASE_DIR / "Reconstrucciones_qwen_deepseek"
 CACHE_DIR = BASE_DIR / ".cache"
+MODELS_DIR = BASE_DIR / "Topic_models"
 
 # Stopwords adicionales para español histórico (siglos XIX-XX)
 STOPWORDS_EXTRA = {
@@ -256,6 +257,7 @@ class HistoricalTopicModeler:
         self.vectorizer = self._build_vectorizer()
         self.dtm = self.vectorizer.fit_transform(self.processed_texts)
 
+
         print(
             f"[INFO] Entrenando modelo con {self.n_topics} temas "
             f"sobre una matriz {self.dtm.shape}…"
@@ -276,7 +278,110 @@ class HistoricalTopicModeler:
             )
 
         self.doc_topic_matrix = self.model.fit_transform(self.dtm)
+
+          # ========== NORMALIZACIÓN PARA NMF ==========
+        if self.method == "nmf":
+            # Cada fila suma la contribución total de todos los tópicos.
+            # Dividimos cada fila por su suma para que sea una distribución de probabilidad.
+            row_sums = self.doc_topic_matrix.sum(axis=1, keepdims=True)
+            # Evitar división por cero (por si alguna fila suma 0, aunque es poco probable)
+            row_sums[row_sums == 0] = 1.0
+            self.doc_topic_matrix = self.doc_topic_matrix / row_sums
+            print("[INFO] Matriz de tópicos de NMF normalizada por filas (suma=1 por documento).")
+        # ===================================================
+
         print("[INFO] Entrenamiento completado.")
+
+    # ------------------------------------------------------------------
+    # Persistencia del modelo
+    # ------------------------------------------------------------------
+
+    def save_model(self, output_path: "str | Path | None" = None) -> Path:
+        """
+        Serializa el modelo entrenado (vectorizador, modelo sklearn,
+        matrices y textos) a un archivo .pkl en Topic_models/.
+
+        Si output_path es None se usa:
+            Topic_models/{n_topics}_topics_{method}.pkl
+        """
+        if self.model is None:
+            raise RuntimeError("Primero llama fit().")
+
+        if output_path is None:
+            MODELS_DIR.mkdir(exist_ok=True)
+            output_path = MODELS_DIR / f"{self.n_topics}_topics_{self.method}.pkl"
+
+        out = Path(output_path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+
+        state = {
+            "config": {
+                "corpus_dir": str(self.corpus_dir),
+                "n_topics": self.n_topics,
+                "method": self.method,
+                "n_words": self.n_words,
+                "min_df": self.min_df,
+                "max_df": self.max_df,
+                "random_state": self.random_state,
+            },
+            "doc_paths": [str(p) for p in self.doc_paths],
+            "raw_texts": self.raw_texts,
+            "processed_texts": self.processed_texts,
+            "vectorizer": self.vectorizer,
+            "dtm": self.dtm,
+            "model": self.model,
+            "doc_topic_matrix": self.doc_topic_matrix,
+        }
+
+        with out.open("wb") as f:
+            pickle.dump(state, f, protocol=pickle.HIGHEST_PROTOCOL)
+
+        print(f"[INFO] Modelo guardado en: {out}")
+        return out
+
+    @classmethod
+    def load_model(cls, path: "str | Path") -> "HistoricalTopicModeler":
+        """
+        Carga un modelo previamente guardado con save_model().
+        No requiere spaCy ni el corpus original en disco.
+
+        Ejemplo::
+            modeler = HistoricalTopicModeler.load_model("Topic_models/10_topics_lda.pkl")
+            modeler.print_topics()
+        """
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"Modelo no encontrado: {p}")
+
+        print(f"[INFO] Cargando modelo desde: {p} …")
+        with p.open("rb") as f:
+            state = pickle.load(f)
+
+        cfg = state["config"]
+        # Usamos __new__ para evitar cargar spaCy (no se necesita para inferencia)
+        instance = cls.__new__(cls)
+        instance.corpus_dir = Path(cfg["corpus_dir"])
+        instance.n_topics = cfg["n_topics"]
+        instance.method = cfg["method"]
+        instance.n_words = cfg["n_words"]
+        instance.min_df = cfg["min_df"]
+        instance.max_df = cfg["max_df"]
+        instance.random_state = cfg["random_state"]
+        instance.doc_paths = [Path(pp) for pp in state["doc_paths"]]
+        instance.raw_texts = state["raw_texts"]
+        instance.processed_texts = state["processed_texts"]
+        instance.vectorizer = state["vectorizer"]
+        instance.dtm = state["dtm"]
+        instance.model = state["model"]
+        instance.doc_topic_matrix = state["doc_topic_matrix"]
+        instance._nlp = None  # no se necesita spaCy al cargar un modelo ya entrenado
+
+        print(
+            f"[INFO] Modelo listo: {cfg['n_topics']} temas, "
+            f"método {cfg['method'].upper()}, "
+            f"{len(instance.doc_paths)} documentos."
+        )
+        return instance
 
     # ------------------------------------------------------------------
     # Inspección de resultados
@@ -456,6 +561,7 @@ if __name__ == "__main__":
 
             out_path = results_dir / f"{n}_topics_result.csv"
             modeler.save_doc_topics(str(out_path))
+            modeler.save_model(MODELS_DIR / f"{n}_topics_{args.method}.pkl")
 
     # ── Modo normal: ejecución única con n_topics fijo ────────────────────────
     else:
@@ -470,6 +576,7 @@ if __name__ == "__main__":
         modeler.print_topics()
         modeler.topic_distribution_summary()
         modeler.print_doc_topics(n=30)
+        modeler.save_model()
 
         if args.output:
             modeler.save_doc_topics(args.output)

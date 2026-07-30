@@ -3,51 +3,34 @@ Evaluación y comparación de modelos de topic modeling.
 
 Lee los archivos .csv producidos por topic_modeling.py en Topic_results/
 (formato: documento, ruta, tema_dominante, peso) y calcula un conjunto de
-métricas cuantitativas que permiten determinar cuán bien separados están
-los temas para cada configuración de n_topics.
-
-Métricas calculadas por archivo:
-  avg_weight          — peso promedio del tema dominante (confianza media)
-  weight_std          — desviación estándar del peso
-  weight_p25 / p75    — primer y tercer cuartil del peso
-  low_conf_pct        — % documentos con peso < 0.30 (asignación débil)
-  high_conf_pct       — % documentos con peso > 0.50 (asignación fuerte)
-  n_docs              — total de documentos
-  n_topics_total      — temas configurados (inferido del nombre del archivo)
-  n_active_topics     — temas que tienen al menos 1 documento como dominante
-  coverage_ratio      — n_active_topics / n_topics_total  (1.0 = ideal)
-  topic_entropy       — entropía de Shannon normalizada de la distribución
-                        de documentos por tema (1.0 = perfectamente balanceado)
-  gini_coeff          — coeficiente Gini de la distribución (0 = equilibrado,
-                        1 = todo concentrado en un tema)
-  balance_score       — 1 − gini_coeff
-  composite_score     — puntuación compuesta:
-                        0.50·avg_weight + 0.25·balance_score + 0.25·coverage_ratio
-                        Valores más altos indican mejor modelo.
-
-Razonamiento detrás de las métricas
--------------------------------------
-Un buen modelo de topics requiere:
-  1. Confianza alta (avg_weight): cada documento se asigna con certeza a
-     un tema → frases claras, vocabulario diferenciado.
-  2. Cobertura total (coverage_ratio): todos los temas configurados capturan
-     al menos un documento → no hay temas "fantasma".
-  3. Balance (balance_score/topic_entropy): los documentos se distribuyen de
-     forma razonablemente uniforme → no se forman mega-temas que absorben
-     casi todo el corpus.
+métricas cuantitativas. Opcionalmente, si se proporciona --models-dir, carga
+los modelos .pkl para calcular coherencia (C_v) y diversidad de tópicos.
 
 Uso:
     python topic_experimenter.py
     python topic_experimenter.py --results-dir Topic_results/
-    python topic_experimenter.py --output reporte_topics.csv
-    python topic_experimenter.py --per-topic
+    python topic_experimenter.py --models-dir Topic_models/ --output reporte.csv
+    python topic_experimenter.py --criterio coherence --n-words 15
 """
 
 import argparse
 import csv
 import math
+import pickle
 import re
+import sys
 from pathlib import Path
+
+# Para coherencia (opcional)
+try:
+    import numpy as np
+    from gensim.models.coherencemodel import CoherenceModel
+    from gensim.corpora.dictionary import Dictionary
+    GENSIM_AVAILABLE = True
+except ImportError:
+    GENSIM_AVAILABLE = False
+    CoherenceModel = None
+    Dictionary = None
 
 # ---------------------------------------------------------------------------
 # Constantes
@@ -55,6 +38,7 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).parent
 DEFAULT_RESULTS_DIR = BASE_DIR / "Topic_results"
+DEFAULT_MODELS_DIR = BASE_DIR / "Topic_models"
 
 LOW_CONF_THRESHOLD  = 0.30
 HIGH_CONF_THRESHOLD = 0.50
@@ -65,9 +49,7 @@ HIGH_CONF_THRESHOLD = 0.50
 # ---------------------------------------------------------------------------
 
 def _infer_n_topics(filename: str) -> int | None:
-    """Extrae el número de temas del nombre del archivo.
-    Acepta patrones como: 10_topics_result.csv, topics_10.csv, 10topics.csv, etc.
-    Devuelve None si no puede inferirlo."""
+    """Extrae el número de temas del nombre del archivo."""
     m = re.search(r"(\d+)", filename)
     return int(m.group(1)) if m else None
 
@@ -88,7 +70,106 @@ def load_csv(path: Path) -> list[dict]:
 
 
 # ---------------------------------------------------------------------------
-# Métricas
+# Carga de modelos .pkl
+# ---------------------------------------------------------------------------
+
+def load_model_pkl(path: Path) -> dict:
+    """Carga el estado de un modelo guardado con topic_modeling.py."""
+    with path.open("rb") as f:
+        return pickle.load(f)
+
+
+def extract_rows_from_state(state: dict) -> list[dict]:
+    """
+    A partir del estado de un modelo, genera la lista de filas
+    (documento, ruta, tema_dominante, peso) usando la matriz doc_topic_matrix.
+    Asume que la matriz ya está normalizada (suma=1 por fila) para NMF.
+    """
+    doc_paths = state.get("doc_paths", [])
+    matrix = state.get("doc_topic_matrix")
+    if matrix is None:
+        return []
+    rows = []
+    for i, path_str in enumerate(doc_paths):
+        dist = matrix[i]
+        dominant = int(dist.argmax()) + 1   # 1-indexed
+        weight = float(dist.max())
+        rows.append({
+            "documento": Path(path_str).name,
+            "ruta": str(path_str),
+            "tema_dominante": dominant,
+            "peso": round(weight, 4),
+        })
+    return rows
+
+
+def get_topic_words_from_state(state: dict, n_words: int) -> list[list[str]]:
+    """
+    Devuelve una lista de listas, cada una con las top-n_words palabras de cada tópico.
+    """
+    model = state.get("model")
+    vectorizer = state.get("vectorizer")
+    if model is None or vectorizer is None:
+        return []
+    feature_names = vectorizer.get_feature_names_out()
+    components = model.components_   # shape (n_topics, n_features)
+    topic_words = []
+    for topic in components:
+        top_indices = topic.argsort()[:-n_words-1:-1]
+        words = [feature_names[i] for i in top_indices]
+        topic_words.append(words)
+    return topic_words
+
+
+def compute_coherence_diversity(state: dict, n_words: int) -> tuple[float | None, float | None]:
+    """
+    Calcula la coherencia (C_v) y diversidad para un modelo cargado.
+    Devuelve (coherence, diversity) o (None, None) si no es posible.
+    """
+    if not GENSIM_AVAILABLE:
+        print("  [WARN] gensim no disponible, no se calculará coherencia.")
+        return None, None
+
+    processed_texts = state.get("processed_texts")
+    if not processed_texts:
+        print("  [WARN] 'processed_texts' no encontrado en el modelo.")
+        return None, None
+
+    topic_words = get_topic_words_from_state(state, n_words)
+    if not topic_words:
+        print("  [WARN] No se pudieron obtener palabras de tópicos.")
+        return None, None
+
+    # Tokenizar textos (cada texto es un string de palabras separadas por espacio)
+    tokenized_corpus = [text.split() for text in processed_texts]
+
+    # Crear diccionario de Gensim a partir del corpus tokenizado
+    dictionary = Dictionary(tokenized_corpus)
+
+    try:
+        cm = CoherenceModel(
+            topics=topic_words,
+            texts=tokenized_corpus,
+            dictionary=dictionary,
+            coherence='c_v'
+        )
+        coherence = cm.get_coherence()
+    except Exception as e:
+        print(f"  [WARN] Error calculando coherencia: {e}")
+        coherence = None
+
+    # Diversidad: porcentaje de palabras únicas en el conjunto de palabras de todos los tópicos
+    all_words = set()
+    for topic in topic_words:
+        all_words.update(topic)
+    total_words = len(topic_words) * n_words
+    diversity = len(all_words) / total_words if total_words > 0 else 0.0
+
+    return coherence, diversity
+
+
+# ---------------------------------------------------------------------------
+# Métricas generales (desde CSVs o desde matriz)
 # ---------------------------------------------------------------------------
 
 def _mean(values: list[float]) -> float:
@@ -102,7 +183,6 @@ def _std(values: list[float], mean: float) -> float:
 
 
 def _percentile(sorted_values: list[float], p: float) -> float:
-    """Percentil p (0–100) de una lista ya ordenada."""
     if not sorted_values:
         return 0.0
     idx = (p / 100) * (len(sorted_values) - 1)
@@ -112,7 +192,6 @@ def _percentile(sorted_values: list[float], p: float) -> float:
 
 
 def _shannon_entropy_normalized(counts: list[int]) -> float:
-    """Entropía de Shannon normalizada (0–1) de una distribución de conteos."""
     total = sum(counts)
     if total == 0:
         return 0.0
@@ -125,7 +204,6 @@ def _shannon_entropy_normalized(counts: list[int]) -> float:
 
 
 def _gini(values: list[float]) -> float:
-    """Coeficiente Gini de una lista de valores no negativos."""
     n = len(values)
     if n == 0:
         return 0.0
@@ -137,8 +215,10 @@ def _gini(values: list[float]) -> float:
     return (2 * cumsum) / (n * total) - (n + 1) / n
 
 
-def compute_metrics(rows: list[dict], n_topics_total: int | None) -> dict:
-    """Calcula todas las métricas para un conjunto de filas de un CSV."""
+def compute_metrics(rows: list[dict], n_topics_total: int | None,
+                    coherence: float | None = None,
+                    diversity: float | None = None) -> dict:
+    """Calcula todas las métricas para un conjunto de filas."""
     if not rows:
         return {}
 
@@ -156,7 +236,6 @@ def compute_metrics(rows: list[dict], n_topics_total: int | None) -> dict:
     n_active = len(topic_counts)
     n_total  = n_topics_total if n_topics_total else n_active
 
-    # Para Gini usamos todos los n_total temas (incluyendo los inactivos con 0)
     all_counts = [topic_counts.get(t, 0) for t in range(1, n_total + 1)]
 
     entropy    = _shannon_entropy_normalized(all_counts)
@@ -167,9 +246,10 @@ def compute_metrics(rows: list[dict], n_topics_total: int | None) -> dict:
     low_conf  = sum(1 for w in weights if w < LOW_CONF_THRESHOLD)  / n_docs * 100
     high_conf = sum(1 for w in weights if w > HIGH_CONF_THRESHOLD) / n_docs * 100
 
+    # Puntuación compuesta original
     composite = 0.50 * avg_w + 0.25 * balance + 0.25 * coverage
 
-    return {
+    metrics = {
         "n_docs":           n_docs,
         "n_topics_total":   n_total,
         "n_active_topics":  n_active,
@@ -186,28 +266,13 @@ def compute_metrics(rows: list[dict], n_topics_total: int | None) -> dict:
         "composite_score":  round(composite, 4),
     }
 
+    # Añadir coherencia y diversidad solo si no son None
+    if coherence is not None:
+        metrics["coherence"] = round(coherence, 4)
+    if diversity is not None:
+        metrics["diversity"] = round(diversity, 4)
 
-def per_topic_stats(rows: list[dict], n_topics_total: int | None) -> list[dict]:
-    """Estadísticas (conteo, peso medio, std) por cada tema."""
-    topic_weights: dict[int, list[float]] = {}
-    for r in rows:
-        t = r["tema_dominante"]
-        topic_weights.setdefault(t, []).append(r["peso"])
-
-    n_total = n_topics_total if n_topics_total else max(topic_weights, default=0)
-    stats = []
-    for t in range(1, n_total + 1):
-        ws = topic_weights.get(t, [])
-        m  = _mean(ws)
-        stats.append({
-            "tema":       t,
-            "n_docs":     len(ws),
-            "avg_weight": round(m, 4),
-            "weight_std": round(_std(ws, m), 4),
-            "min_weight": round(min(ws), 4) if ws else 0.0,
-            "max_weight": round(max(ws), 4) if ws else 0.0,
-        })
-    return stats
+    return metrics
 
 
 # ---------------------------------------------------------------------------
@@ -215,46 +280,78 @@ def per_topic_stats(rows: list[dict], n_topics_total: int | None) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def _bar(value: float, width: int = 20, max_val: float = 1.0) -> str:
-    """Barra ASCII proporcional a value/max_val."""
     filled = int(round(value / max_val * width)) if max_val else 0
     return "█" * filled + "░" * (width - filled)
 
 
-def print_summary(results: list[dict]) -> None:
-    """Imprime tabla comparativa de todos los modelos, ordenada por composite_score."""
+def print_summary(results: list[dict], criterion: str = "composite_score") -> None:
+    """Imprime tabla comparativa de todos los modelos, ordenada por criterion."""
     if not results:
         print("[WARN] No hay resultados para mostrar.")
         return
 
-    sorted_res = sorted(results, key=lambda r: r["metrics"]["composite_score"], reverse=True)
+    # Verificar que el criterio exista en los resultados
+    sample = results[0]["metrics"]
+    if criterion not in sample:
+        print(f"[WARN] Criterio '{criterion}' no encontrado. Usando 'composite_score'.")
+        criterion = "composite_score"
 
-    print(f"\n{'='*80}")
-    print("  COMPARACIÓN DE MODELOS  (ordenado por composite_score ↓)")
-    print(f"{'='*80}")
-    header = (
-        f"{'Archivo':<28} {'n_topics':>8} {'avg_w':>6} {'balance':>8} "
-        f"{'cov':>5} {'hi_conf%':>8} {'composite':>10}"
-    )
+    sorted_res = sorted(results, key=lambda r: r["metrics"].get(criterion, 0), reverse=True)
+
+    # Determinar columnas a mostrar
+    first_metrics = sorted_res[0]["metrics"]
+    has_coherence = "coherence" in first_metrics
+    has_diversity = "diversity" in first_metrics
+
+    print(f"\n{'='*100}")
+    print(f"  COMPARACIÓN DE MODELOS  (ordenado por: {criterion})")
+    print(f"{'='*100}")
+
+    # Cabecera
+    header = f"{'Archivo':<28} {'n_topics':>8} {'avg_w':>6} {'balance':>8} {'cov':>5}"
+    if has_coherence:
+        header += f" {'coherence':>10}"
+    if has_diversity:
+        header += f" {'diversity':>10}"
+    header += f" {'composite':>10}  {criterion.upper():>12}"
     print(header)
-    print("-" * 80)
+    print("-" * 100)
 
     for r in sorted_res:
         m = r["metrics"]
-        bar = _bar(m["composite_score"])
-        print(
-            f"{r['filename']:<28} {m['n_topics_total']:>8} "
-            f"{m['avg_weight']:>6.3f} {m['balance_score']:>8.3f} "
-            f"{m['coverage_ratio']:>5.2f} {m['high_conf_pct']:>8.1f} "
-            f"{m['composite_score']:>10.4f}  {bar}"
-        )
+        line = f"{r['filename']:<28} {m['n_topics_total']:>8} {m['avg_weight']:>6.3f} {m['balance_score']:>8.3f} {m['coverage_ratio']:>5.2f}"
+        if has_coherence:
+            val = m.get('coherence', 'N/A')
+            if isinstance(val, float):
+                line += f" {val:>10.4f}"
+            else:
+                line += f" {val:>10}"
+        if has_diversity:
+            val = m.get('diversity', 'N/A')
+            if isinstance(val, float):
+                line += f" {val:>10.4f}"
+            else:
+                line += f" {val:>10}"
+        line += f" {m['composite_score']:>10.4f}  "
+        val_crit = m.get(criterion, 'N/A')
+        if isinstance(val_crit, float):
+            line += f"{val_crit:>12.4f}"
+        else:
+            line += f"{val_crit:>12}"
+        print(line)
 
-    print(f"\n{'='*80}")
+    print(f"\n{'='*100}")
     best = sorted_res[0]
+    best_val = best['metrics'].get(criterion, 'N/A')
+    if isinstance(best_val, float):
+        best_str = f"{best_val:.4f}"
+    else:
+        best_str = str(best_val)
     print(
-        f"  Mejor modelo: {best['filename']}  "
-        f"(composite={best['metrics']['composite_score']:.4f})"
+        f"  Mejor modelo según '{criterion}': {best['filename']}  "
+        f"({criterion}={best_str})"
     )
-    print(f"{'='*80}\n")
+    print(f"{'='*100}\n")
 
 
 def print_detailed(results: list[dict], show_per_topic: bool = False) -> None:
@@ -263,10 +360,10 @@ def print_detailed(results: list[dict], show_per_topic: bool = False) -> None:
         m  = r["metrics"]
         pt = r.get("per_topic", [])
 
-        print(f"\n{'─'*60}")
+        print(f"\n{'─'*70}")
         print(f"  Archivo : {r['filename']}")
         print(f"  n_docs  : {m['n_docs']}   n_topics_total: {m['n_topics_total']}")
-        print(f"{'─'*60}")
+        print(f"{'─'*70}")
         print(f"  Confianza de asignación (peso del tema dominante):")
         print(f"    Media              : {m['avg_weight']:.4f}  {_bar(m['avg_weight'])}")
         print(f"    Std                : {m['weight_std']:.4f}")
@@ -279,6 +376,10 @@ def print_detailed(results: list[dict], show_per_topic: bool = False) -> None:
         print(f"    Entropía norm.     : {m['topic_entropy']:.4f}  {_bar(m['topic_entropy'])}")
         print(f"    Gini               : {m['gini_coeff']:.4f}")
         print(f"    Balance            : {m['balance_score']:.4f}  {_bar(m['balance_score'])}")
+        if "coherence" in m:
+            print(f"  Coherencia (C_v)    : {m['coherence']:.4f}  {_bar(m['coherence'])}")
+        if "diversity" in m:
+            print(f"  Diversidad          : {m['diversity']:.4f}  {_bar(m['diversity'])}")
         print(f"  Puntuación compuesta : {m['composite_score']:.4f}  {_bar(m['composite_score'])}")
 
         if show_per_topic and pt:
@@ -297,22 +398,33 @@ def print_detailed(results: list[dict], show_per_topic: bool = False) -> None:
 # Guardado de reporte CSV
 # ---------------------------------------------------------------------------
 
-def save_report(results: list[dict], output_path: str) -> None:
-    """Guarda un CSV con las métricas de todos los modelos."""
+def save_report(results: list[dict], output_path: str, criterion: str = "composite_score") -> None:
+    """Guarda un CSV con las métricas de todos los modelos, ordenado por criterion."""
     out = Path(output_path)
     out.parent.mkdir(parents=True, exist_ok=True)
 
-    fieldnames = [
-        "filename", "n_docs", "n_topics_total", "n_active_topics",
-        "avg_weight", "weight_std", "weight_p25", "weight_p75",
-        "low_conf_pct", "high_conf_pct",
-        "coverage_ratio", "topic_entropy", "gini_coeff", "balance_score",
-        "composite_score",
-    ]
+    # Obtener todas las claves de métricas de los resultados
+    fieldnames = ["filename"]
+    if results:
+        sample_metrics = results[0]["metrics"]
+        # Queremos un orden fijo: primero las básicas, luego coherencia/diversidad si existen
+        base_fields = [
+            "n_docs", "n_topics_total", "n_active_topics",
+            "avg_weight", "weight_std", "weight_p25", "weight_p75",
+            "low_conf_pct", "high_conf_pct",
+            "coverage_ratio", "topic_entropy", "gini_coeff", "balance_score",
+            "composite_score"
+        ]
+        extra_fields = [k for k in sample_metrics.keys() if k not in base_fields]
+        fieldnames.extend(base_fields)
+        fieldnames.extend(extra_fields)
+
     with out.open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         writer.writeheader()
-        for r in sorted(results, key=lambda x: x["metrics"]["n_topics_total"]):
+        # Ordenar según el criterio
+        sorted_res = sorted(results, key=lambda r: r["metrics"].get(criterion, 0), reverse=True)
+        for r in sorted_res:
             row = {"filename": r["filename"]}
             row.update(r["metrics"])
             writer.writerow(row)
@@ -334,6 +446,11 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Carpeta con los CSVs de resultados (default: Topic_results/)",
     )
     p.add_argument(
+        "--models-dir",
+        default=None,
+        help="Carpeta con los modelos .pkl (opcional). Si se da, calcula coherencia y diversidad.",
+    )
+    p.add_argument(
         "--output",
         default=None,
         help="Ruta CSV para guardar el reporte de métricas (opcional).",
@@ -348,21 +465,41 @@ def build_arg_parser() -> argparse.ArgumentParser:
         default="*_topics_result.csv",
         help="Patrón glob para encontrar archivos de resultados (default: *_topics_result.csv).",
     )
+    p.add_argument(
+        "--n-words",
+        type=int,
+        default=10,
+        help="Número de palabras por tópico para coherencia y diversidad (default: 10).",
+    )
+    p.add_argument(
+        "--criterio",
+        default="composite_score",
+        help="Métrica para ordenar y guardar el reporte (ej: composite_score, coherence, diversity, avg_weight).",
+    )
     return p
 
+
+# ---------------------------------------------------------------------------
+# Main
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
     args = build_arg_parser().parse_args()
 
     results_dir = Path(args.results_dir)
     if not results_dir.exists():
-        import sys
         print(f"[ERROR] No existe la carpeta: {results_dir}", file=sys.stderr)
         sys.exit(1)
 
+    # Si se proporciona models-dir, cargamos modelos para calcular coherencia/diversidad
+    models_dir = Path(args.models_dir) if args.models_dir else None
+    if models_dir and not models_dir.exists():
+        print(f"[ERROR] No existe la carpeta de modelos: {models_dir}", file=sys.stderr)
+        sys.exit(1)
+
+    # Buscar CSVs
     csv_files = sorted(results_dir.glob(args.pattern))
     if not csv_files:
-        import sys
         print(
             f"[ERROR] No se encontraron archivos con patrón '{args.pattern}' en {results_dir}",
             file=sys.stderr,
@@ -371,17 +508,44 @@ if __name__ == "__main__":
 
     print(f"[INFO] {len(csv_files)} archivo(s) encontrado(s) en {results_dir}")
 
+    # Lista de modelos .pkl
+    pkl_files = []
+    if models_dir:
+        pkl_files = list(models_dir.glob("*_topics_*.pkl"))
+        print(f"[INFO] {len(pkl_files)} modelo(s) .pkl encontrados en {models_dir}")
+
     results = []
+
     for csv_path in csv_files:
         try:
-            rows       = load_csv(csv_path)
-            n_total    = _infer_n_topics(csv_path.name)
-            metrics    = compute_metrics(rows, n_total)
-            pt_stats   = per_topic_stats(rows, n_total) if args.per_topic else []
+            rows = load_csv(csv_path)
+            n_total = _infer_n_topics(csv_path.name)
+            coherence = None
+            diversity = None
+
+            if models_dir and pkl_files and n_total is not None:
+                # Buscar .pkl que tenga el número exacto de tópicos (usando regex)
+                matching_pkl = None
+                for pkl in pkl_files:
+                    # Extraer número del nombre del .pkl (ej. "20" de "20_topics_nmf.pkl")
+                    m = re.search(r"(\d+)_topics_", pkl.name)
+                    if m and int(m.group(1)) == n_total:
+                        matching_pkl = pkl
+                        break
+                if matching_pkl:
+                    state = load_model_pkl(matching_pkl)
+                    coherence, diversity = compute_coherence_diversity(state, args.n_words)
+                    coherence_str = f"{coherence:.4f}" if coherence is not None else "N/A"
+                    diversity_str = f"{diversity:.4f}" if diversity is not None else "N/A"
+                    print(f"  → Coherencia C_v: {coherence_str}, Diversidad: {diversity_str} para {matching_pkl.name}")
+                else:
+                    print(f"  ⚠️  No se encontró .pkl para {csv_path.name} (n_topics={n_total})")
+
+            metrics = compute_metrics(rows, n_total, coherence, diversity)
             results.append({
-                "filename":  csv_path.name,
-                "metrics":   metrics,
-                "per_topic": pt_stats,
+                "filename": csv_path.name,
+                "metrics": metrics,
+                "per_topic": [],
             })
             print(f"  ✓ {csv_path.name}  ({len(rows)} docs, n_topics={n_total})")
         except Exception as exc:
@@ -389,9 +553,12 @@ if __name__ == "__main__":
 
     if not results:
         print("[ERROR] No se pudo procesar ningún archivo.")
-    else:
-        print_summary(results)
-        print_detailed(results, show_per_topic=args.per_topic)
+        sys.exit(1)
 
-        if args.output:
-            save_report(results, args.output)
+    # Imprimir resumen y detalles
+    print_summary(results, criterion=args.criterio)
+    print_detailed(results, show_per_topic=args.per_topic)
+
+    # Guardar reporte si se solicita
+    if args.output:
+        save_report(results, args.output, criterion=args.criterio)
