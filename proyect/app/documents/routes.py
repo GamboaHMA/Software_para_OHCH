@@ -227,3 +227,191 @@ def ocr_stream(task_id):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Chat Histórico ─────────────────────────────────────────────────────────────
+
+@bp.route("/chat")
+def chat_view():
+    """Página principal del chat histórico."""
+    from app.utils import chat_service
+    models = chat_service.list_available_models()
+    ollama_models = list(chat_service.OLLAMA_MODEL_CONFIGS.keys())
+    default_ollama = chat_service.DEFAULT_OLLAMA_MODEL
+    return render_template(
+        "chat.html",
+        topic_models=models,
+        ollama_models=ollama_models,
+        default_ollama=default_ollama,
+    )
+
+
+@bp.route("/api/chat/search", methods=["POST"])
+def chat_search():
+    """
+    Endpoint de búsqueda semántica de documentos.
+
+    Recibe JSON con:
+        query       (str)  – consulta histórica del usuario
+        model_path  (str)  – ruta relativa al .pkl del modelo de temas
+        threshold   (float)– umbral de similitud [0.0, 1.0], default 0.30
+        max_results (int)  – máximo de documentos a devolver, default 50
+        ollama_model(str)  – alias Ollama para extraer tema clave (opcional)
+
+    Devuelve JSON con:
+        documents   – lista de {doc_id, similarity, topic_idx}
+        query_topics– distribución de temas de la consulta (para depuración)
+        model_used  – ruta del pkl usado
+    """
+    from app.utils import chat_service
+    from app.models import Document
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    query      = (data.get("query") or "").strip()
+    model_path = (data.get("model_path") or "").strip()
+    threshold  = float(data.get("threshold", 0.30))
+    max_results = int(data.get("max_results", 50))
+
+    # Validaciones básicas de entrada
+    if not query:
+        return jsonify({"error": "La consulta no puede estar vacía"}), 400
+    if not model_path:
+        return jsonify({"error": "Se debe especificar un modelo de temas"}), 400
+    if not (0.0 <= threshold <= 1.0):
+        return jsonify({"error": "El umbral debe estar entre 0 y 1"}), 400
+
+    try:
+        state = chat_service.load_topic_model(model_path)
+    except (FileNotFoundError, ValueError) as e:
+        return jsonify({"error": str(e)}), 404
+
+    # Buscar documentos similares
+    results = chat_service.find_relevant_documents(
+        query=query,
+        state=state,
+        threshold=threshold,
+        max_results=max_results,
+    )
+
+    # Enriquecer resultados con datos de la base de datos
+    enriched = []
+    for item in results:
+        db_doc = Document.query.filter_by(doc_id=item["doc_id"]).first()
+        enriched.append({
+            "doc_id":     item["doc_id"],
+            "similarity": item["similarity"],
+            "topic_idx":  item["topic_idx"],
+            "db_id":      db_doc.id    if db_doc else None,
+            "title":      db_doc.title if db_doc else None,
+            "date_raw":   db_doc.date_raw if db_doc else None,
+            "in_db":      db_doc is not None,
+        })
+
+    # Obtener vector de temas de la consulta (para mostrarlo en UI como debug)
+    query_vector = chat_service.query_to_topic_vector(query, state)
+
+    return jsonify({
+        "documents":    enriched,
+        "query_topics": query_vector.tolist(),
+        "model_used":   model_path,
+        "total_found":  len(enriched),
+    })
+
+
+@bp.route("/api/chat/summary/stream", methods=["POST"])
+def chat_summary_stream():
+    """
+    Endpoint de generación de resumen histórico con streaming SSE.
+
+    Recibe JSON con:
+        query        (str)  – consulta histórica del usuario
+        model_path   (str)  – ruta relativa al .pkl del modelo de temas
+        ollama_model (str)  – alias del modelo Ollama ('salamandra' o 'qwen')
+        threshold    (float)– umbral de similitud [0.0, 1.0], default 0.30
+        max_docs     (int)  – máximo de documentos usados para el contexto, default 10
+
+    Devuelve un stream SSE con eventos:
+        {"type": "chunk",  "text": "..."}   – fragmento de texto generado
+        {"type": "done"}                    – generación completada
+        {"type": "error",  "msg":  "..."}   – error durante la generación
+    """
+    import json as _json
+    from app.utils import chat_service
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    query        = (data.get("query") or "").strip()
+    model_path   = (data.get("model_path") or "").strip()
+    ollama_alias = (data.get("ollama_model") or chat_service.DEFAULT_OLLAMA_MODEL).strip()
+    threshold    = float(data.get("threshold", 0.30))
+    max_docs     = int(data.get("max_docs", 10))
+
+    # Validaciones básicas
+    if not query:
+        return jsonify({"error": "La consulta no puede estar vacía"}), 400
+    if not model_path:
+        return jsonify({"error": "Se debe especificar un modelo de temas"}), 400
+    if ollama_alias not in chat_service.OLLAMA_MODEL_CONFIGS:
+        return jsonify({"error": f"Modelo Ollama no reconocido: {ollama_alias}"}), 400
+
+    try:
+        state = chat_service.load_topic_model(model_path)
+    except (FileNotFoundError, ValueError) as e:
+        return jsonify({"error": str(e)}), 404
+
+    # Recuperar documentos relevantes para construir el contexto
+    results = chat_service.find_relevant_documents(
+        query=query,
+        state=state,
+        threshold=threshold,
+        max_results=max_docs,
+    )
+
+    def generate():
+        """Genera el stream SSE del resumen de Ollama."""
+        if not results:
+            yield (
+                "data: "
+                + _json.dumps(
+                    {"type": "error", "msg": "No se encontraron documentos relevantes para el umbral indicado."},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+            return
+
+        try:
+            for chunk_text in chat_service.stream_summary(
+                query=query,
+                results=results,
+                state=state,
+                ollama_alias=ollama_alias,
+            ):
+                yield (
+                    "data: "
+                    + _json.dumps({"type": "chunk", "text": chunk_text}, ensure_ascii=False)
+                    + "\n\n"
+                )
+        except Exception as exc:
+            yield (
+                "data: "
+                + _json.dumps({"type": "error", "msg": str(exc)}, ensure_ascii=False)
+                + "\n\n"
+            )
+            return
+
+        yield "data: " + _json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
