@@ -1,0 +1,570 @@
+{% extends "base.html" %}
+{% block title %}Búsqueda TF-IDF | Corpus Documental{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Layout idéntico al del Chat ──────────────────────────────── */
+  #search-wrap {
+    display: flex;
+    gap: 1rem;
+    height: calc(100vh - 120px);
+    min-height: 500px;
+  }
+
+  /* ── Panel izquierdo: controles ──────────────────────────────── */
+  #controls-panel {
+    width: 320px;
+    flex-shrink: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    min-height: 0;
+    overflow-y: auto;
+  }
+
+  /* ── Panel derecho: resultados ───────────────────────────────── */
+  #results-panel {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  /* ── Ambas tarjetas comparten el alto disponible al 50 / 50 ──── */
+  #docs-card,
+  #summary-card {
+    flex: 1 1 0;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Área de resultados de documentos ────────────────────────── */
+  #docs-results {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  /* ── Área del resumen generado ───────────────────────────────── */
+  #summary-area {
+    flex: 1;
+    overflow-y: auto;
+  }
+
+  /* ── Texto del resumen ───────────────────────────────────────── */
+  #summary-text {
+    font-family: Georgia, 'Times New Roman', serif;
+    font-size: 0.9rem;
+    line-height: 1.85;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #2d2d2d;
+    min-height: 80px;
+  }
+
+  /* ── Barra de similitud ──────────────────────────────────────── */
+  .sim-bar-wrap {
+    height: 6px;
+    background: #e9ecef;
+    border-radius: 3px;
+    margin-top: 3px;
+  }
+  .sim-bar {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #198754, #75b798);
+    transition: width 0.4s ease;
+  }
+
+  /* ── Badge de similitud ──────────────────────────────────────── */
+  .sim-badge {
+    font-size: 0.7rem;
+    font-weight: 600;
+    padding: 0.15rem 0.45rem;
+    border-radius: 0.4rem;
+    background: #d1e7dd;
+    color: #0a3622;
+  }
+
+  /* ── Spinner ─────────────────────────────────────────────────── */
+  .spinner-sm {
+    width: 1rem;
+    height: 1rem;
+    border-width: 2px;
+  }
+
+  /* ── Estado vacío ────────────────────────────────────────────── */
+  .empty-state {
+    color: #adb5bd;
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 2rem 0;
+  }
+
+  /* ── Badge del índice ────────────────────────────────────────── */
+  #index-badge {
+    font-size: 0.72rem;
+  }
+
+  /* ── Cursor parpadeante durante generación ───────────────────── */
+  @keyframes blink { 50% { opacity: 0; } }
+  #summary-cursor {
+    display: inline-block;
+    width: 2px;
+    height: 1em;
+    background: #198754;
+    margin-left: 2px;
+    animation: blink 0.9s step-end infinite;
+    vertical-align: text-bottom;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="search-wrap">
+
+  {# ════════════════════════ PANEL IZQUIERDO: controles ════════════════════ #}
+  <div id="controls-panel">
+
+    {# ── Tarjeta: Estado del índice ────────────────────────────────────── #}
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-semibold small">🗂️ Índice TF-IDF</div>
+      <div class="card-body d-flex flex-column gap-2">
+
+        {# Estado actual del índice #}
+        <div class="d-flex justify-content-between align-items-center">
+          <span class="small text-muted">Documentos indexados</span>
+          <span id="index-badge" class="badge
+            {{ 'bg-success' if index_stats.ready else 'bg-warning text-dark' }}">
+            {% if index_stats.ready %}
+              {{ index_stats.indexed }} docs ·
+              {{ "{:,}".format(index_stats.vocabulary) }} términos
+            {% else %}
+              Sin índice — se construirá al buscar
+            {% endif %}
+          </span>
+        </div>
+
+        {# Botón de reconstrucción manual #}
+        <button id="btn-rebuild" class="btn btn-outline-secondary btn-sm w-100">
+          <span id="rebuild-spin" class="spinner-border spinner-sm d-none" role="status"></span>
+          🔄 Reconstruir índice
+        </button>
+        <div class="form-text">
+          El índice se actualiza automáticamente al buscar si el número de
+          documentos en la base de datos cambia. Usa este botón si editaste
+          textos OCR sin añadir documentos nuevos.
+        </div>
+
+      </div>
+    </div>
+
+    {# ── Tarjeta: Configuración ────────────────────────────────────────── #}
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-semibold small">⚙️ Configuración</div>
+      <div class="card-body d-flex flex-column gap-3">
+
+        {# Modelo Ollama (solo para el resumen) #}
+        <div>
+          <label class="form-label" for="ollama-model-sel">Modelo Ollama (resumen)</label>
+          <select id="ollama-model-sel" class="form-select form-select-sm">
+            {% for alias in ollama_models %}
+            <option value="{{ alias }}" {{ 'selected' if alias == default_ollama }}>
+              {{ alias | capitalize }}
+              {% if alias == 'salamandra' %}(hdnh2006/salamandra-7b-instruct:latest)
+              {% elif alias == 'qwen' %}(qwen2.5:3b)
+              {% endif %}
+            </option>
+            {% endfor %}
+          </select>
+          <div class="form-text">Solo se usa al generar el resumen histórico.</div>
+        </div>
+
+        {# Umbral de similitud #}
+        <div>
+          <label class="form-label" for="threshold-range">
+            Umbral de similitud: <strong id="threshold-val">5%</strong>
+          </label>
+          <input type="range" class="form-range" id="threshold-range"
+                 min="1" max="50" step="1" value="5">
+          <div class="form-text">
+            TF-IDF produce scores más bajos que los modelos de temas.
+            Valores típicos: 2 – 20 %.
+          </div>
+        </div>
+
+        {# Máximo de documentos #}
+        <div>
+          <label class="form-label" for="max-results-inp">Máximo de documentos</label>
+          <input type="number" class="form-control form-control-sm"
+                 id="max-results-inp" value="50" min="1" max="500">
+        </div>
+
+      </div>
+    </div>
+
+    {# ── Tarjeta: Consulta ─────────────────────────────────────────────── #}
+    <div class="card shadow-sm flex-grow-1">
+      <div class="card-header bg-white fw-semibold small">🔍 Palabras clave</div>
+      <div class="card-body d-flex flex-column gap-2 h-100">
+        <textarea id="query-input" class="form-control flex-grow-1"
+                  placeholder="Ej: guerra carlista Cataluña siglo XIX"
+                  style="resize:none; min-height:100px;"></textarea>
+
+        <button id="btn-search" class="btn btn-success btn-sm w-100">
+          <span id="search-spin" class="spinner-border spinner-sm d-none" role="status"></span>
+          🔍 Buscar documentos
+        </button>
+
+        <button id="btn-summary" class="btn btn-outline-primary btn-sm w-100 d-none">
+          <span id="summary-spin" class="spinner-border spinner-sm d-none" role="status"></span>
+          📜 Generar resumen con Ollama
+        </button>
+
+        <button id="btn-stop" class="btn btn-outline-danger btn-sm w-100 d-none">
+          ⏹ Detener generación
+        </button>
+
+      </div>
+    </div>
+
+  </div>{# /controls-panel #}
+
+  {# ════════════════════════ PANEL DERECHO: resultados ════════════════════ #}
+  <div id="results-panel">
+
+    {# ── Documentos relevantes ─────────────────────────────────────────── #}
+    <div class="card shadow-sm" id="docs-card">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold small">📄 Documentos relevantes</span>
+        <span id="docs-count" class="badge bg-secondary">0</span>
+      </div>
+      <div id="docs-results" class="card-body p-2">
+        <div class="empty-state">
+          Escribe palabras clave y haz clic en "Buscar documentos" para empezar.
+        </div>
+      </div>
+    </div>
+
+    {# ── Resumen generado ──────────────────────────────────────────────── #}
+    <div class="card shadow-sm" id="summary-card">
+      <div class="card-header bg-white d-flex justify-content-between align-items-center">
+        <span class="fw-semibold small">📝 Resumen histórico</span>
+        <button id="btn-copy" class="btn btn-outline-secondary btn-sm py-0 d-none"
+                title="Copiar resumen">📋 Copiar</button>
+      </div>
+      <div id="summary-area" class="card-body">
+        <div class="empty-state" id="summary-placeholder">
+          Primero busca documentos relevantes y luego haz clic en
+          "Generar resumen con Ollama".
+        </div>
+        <div id="summary-text" class="d-none"></div>
+      </div>
+    </div>
+
+  </div>{# /results-panel #}
+
+</div>{# /search-wrap #}
+{% endblock %}
+
+
+{% block scripts %}
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   tfidf_search.js — lógica de la búsqueda TF-IDF por palabras clave
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Elementos del DOM ──────────────────────────────────────────────────────
+const ollamaModelSel     = document.getElementById("ollama-model-sel");
+const thresholdRange     = document.getElementById("threshold-range");
+const thresholdVal       = document.getElementById("threshold-val");
+const maxResultsInp      = document.getElementById("max-results-inp");
+const queryInput         = document.getElementById("query-input");
+const btnSearch          = document.getElementById("btn-search");
+const btnSummary         = document.getElementById("btn-summary");
+const btnStop            = document.getElementById("btn-stop");
+const btnCopy            = document.getElementById("btn-copy");
+const btnRebuild         = document.getElementById("btn-rebuild");
+const searchSpin         = document.getElementById("search-spin");
+const summarySpin        = document.getElementById("summary-spin");
+const rebuildSpin        = document.getElementById("rebuild-spin");
+const docsResults        = document.getElementById("docs-results");
+const docsCount          = document.getElementById("docs-count");
+const indexBadge         = document.getElementById("index-badge");
+const summaryPlaceholder = document.getElementById("summary-placeholder");
+const summaryText        = document.getElementById("summary-text");
+
+// ── Actualizar label del slider ────────────────────────────────────────────
+thresholdRange.addEventListener("input", () => {
+  thresholdVal.textContent = thresholdRange.value + "%";
+});
+
+// ── Función: mostrar/ocultar spinner ──────────────────────────────────────
+function setLoading(btn, spin, loading) {
+  spin.classList.toggle("d-none", !loading);
+  btn.disabled = loading;
+}
+
+// ── Función: actualizar el badge del índice ────────────────────────────────
+function updateIndexBadge(stats) {
+  if (!stats) return;
+  if (stats.ready) {
+    indexBadge.className = "badge bg-success";
+    indexBadge.textContent =
+      `${stats.indexed} docs · ${stats.vocabulary.toLocaleString()} términos`;
+  } else {
+    indexBadge.className = "badge bg-warning text-dark";
+    indexBadge.textContent = "Sin índice";
+  }
+}
+
+// ── Función: renderizar tabla de resultados ────────────────────────────────
+function renderDocuments(docs) {
+  docsCount.textContent = docs.length;
+
+  if (docs.length === 0) {
+    docsResults.innerHTML =
+      '<div class="empty-state">No se encontraron documentos para el umbral indicado. ' +
+      'Prueba a bajarlo.</div>';
+    btnSummary.classList.add("d-none");
+    return;
+  }
+
+  let html =
+    '<div class="table-responsive">' +
+    '<table class="table table-sm table-hover mb-0">' +
+    '<thead class="table-light"><tr>' +
+    '<th style="width:1%">#</th>' +
+    '<th>ID Documento</th>' +
+    '<th>Título</th>' +
+    '<th>Fecha</th>' +
+    '<th style="width:12%">Similitud</th>' +
+    '<th style="width:1%"></th>' +
+    '</tr></thead><tbody>';
+
+  docs.forEach((doc, i) => {
+    const pct      = Math.round(doc.similarity * 100);
+    // Escalar la barra: TF-IDF scores son pequeños, usar escala 0–30%
+    const barPct   = Math.min(100, Math.round((doc.similarity / 0.30) * 100));
+    const barColor = pct >= 15 ? "#198754" : pct >= 8 ? "#0d6efd" : "#6c757d";
+    const titleTxt = doc.title    || "(sin título)";
+    const dateTxt  = doc.date_raw || "—";
+
+    const idCell = doc.in_db
+      ? `<a href="/documento/${doc.db_id}" target="_blank"
+            class="text-decoration-none fw-semibold">${doc.doc_id}</a>`
+      : `<span class="text-muted">${doc.doc_id}</span>`;
+
+    html += `
+      <tr>
+        <td class="text-muted small">${i + 1}</td>
+        <td class="small">${idCell}</td>
+        <td class="small text-truncate" style="max-width:200px;"
+            title="${titleTxt}">${titleTxt}</td>
+        <td class="small text-nowrap">${dateTxt}</td>
+        <td>
+          <span class="sim-badge">${pct}%</span>
+          <div class="sim-bar-wrap">
+            <div class="sim-bar"
+                 style="width:${barPct}%; background:${barColor}"></div>
+          </div>
+        </td>
+        <td>
+          ${doc.in_db
+            ? `<a href="/documento/${doc.db_id}" target="_blank"
+                 class="btn btn-outline-success btn-sm py-0 px-1"
+                 title="Ver documento">👁</a>`
+            : ""}
+        </td>
+      </tr>`;
+  });
+
+  html += "</tbody></table></div>";
+  docsResults.innerHTML = html;
+  btnSummary.classList.remove("d-none");
+}
+
+// ── Acción: Reconstruir índice ─────────────────────────────────────────────
+btnRebuild.addEventListener("click", async () => {
+  setLoading(btnRebuild, rebuildSpin, true);
+  try {
+    const resp = await fetch("/api/busqueda/rebuild", { method: "POST" });
+    const data = await resp.json();
+    if (data.ok) {
+      updateIndexBadge(data.index_stats);
+    }
+  } catch (e) {
+    alert("Error al reconstruir el índice: " + e.message);
+  } finally {
+    setLoading(btnRebuild, rebuildSpin, false);
+  }
+});
+
+// ── Acción: Buscar documentos ──────────────────────────────────────────────
+btnSearch.addEventListener("click", async () => {
+  const query = queryInput.value.trim();
+  if (!query) {
+    queryInput.focus();
+    queryInput.classList.add("is-invalid");
+    setTimeout(() => queryInput.classList.remove("is-invalid"), 2000);
+    return;
+  }
+
+  const threshold  = parseInt(thresholdRange.value, 10) / 100;
+  const maxResults = parseInt(maxResultsInp.value, 10) || 50;
+
+  setLoading(btnSearch, searchSpin, true);
+  btnSummary.classList.add("d-none");
+
+  // Limpiar resumen anterior
+  summaryText.textContent = "";
+  summaryText.classList.add("d-none");
+  summaryPlaceholder.classList.remove("d-none");
+  btnCopy.classList.add("d-none");
+
+  try {
+    const resp = await fetch("/api/busqueda/search", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ query, threshold, max_results: maxResults }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      docsResults.innerHTML =
+        `<div class="alert alert-danger m-2 small">${err.error || "Error desconocido"}</div>`;
+      return;
+    }
+
+    const data = await resp.json();
+    renderDocuments(data.documents || []);
+    updateIndexBadge(data.index_stats);
+
+  } catch (e) {
+    docsResults.innerHTML =
+      `<div class="alert alert-danger m-2 small">Error de red: ${e.message}</div>`;
+  } finally {
+    setLoading(btnSearch, searchSpin, false);
+  }
+});
+
+// ── Acción: Generar resumen con Ollama (streaming) ─────────────────────────
+btnSummary.addEventListener("click", () => {
+  const query      = queryInput.value.trim();
+  const ollamaAlias = ollamaModelSel.value;
+  const threshold  = parseInt(thresholdRange.value, 10) / 100;
+
+  if (!query) return;
+
+  summaryText.textContent = "";
+  summaryText.classList.remove("d-none");
+  summaryPlaceholder.classList.add("d-none");
+  btnCopy.classList.add("d-none");
+
+  // Cursor parpadeante mientras genera
+  const cursor = document.createElement("span");
+  cursor.id = "summary-cursor";
+  summaryText.appendChild(cursor);
+
+  setLoading(btnSummary, summarySpin, true);
+  btnStop.classList.remove("d-none");
+  btnSearch.disabled = true;
+
+  fetch("/api/busqueda/summary/stream", {
+    method:  "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      query,
+      ollama_model: ollamaAlias,
+      threshold,
+      max_docs: 10,
+    }),
+  }).then(resp => {
+    if (!resp.ok) {
+      return resp.json().then(err => { throw new Error(err.error || "Error"); });
+    }
+
+    const reader  = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let   buffer  = "";
+
+    function finalizeSummary() {
+      const cur = document.getElementById("summary-cursor");
+      if (cur) cur.remove();
+      setLoading(btnSummary, summarySpin, false);
+      btnSummary.disabled = false;
+      btnStop.classList.add("d-none");
+      btnSearch.disabled = false;
+      btnCopy.classList.remove("d-none");
+    }
+
+    function processChunk({ done, value }) {
+      if (done) { finalizeSummary(); return; }
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop();
+
+      lines.forEach(line => {
+        if (!line.startsWith("data: ")) return;
+        try {
+          const msg = JSON.parse(line.slice(6));
+          if (msg.type === "chunk") {
+            const cur = document.getElementById("summary-cursor");
+            if (cur) cur.insertAdjacentText("beforebegin", msg.text);
+            else summaryText.appendChild(document.createTextNode(msg.text));
+          } else if (msg.type === "done") {
+            finalizeSummary();
+          } else if (msg.type === "error") {
+            summaryText.textContent += "\n\n[ERROR] " + msg.msg;
+            finalizeSummary();
+          }
+        } catch (_) {}
+      });
+
+      return reader.read().then(processChunk);
+    }
+
+    return reader.read().then(processChunk);
+
+  }).catch(err => {
+    summaryText.textContent = "[Error: " + err.message + "]";
+    const cur = document.getElementById("summary-cursor");
+    if (cur) cur.remove();
+    setLoading(btnSummary, summarySpin, false);
+    btnSummary.disabled = false;
+    btnStop.classList.add("d-none");
+    btnSearch.disabled = false;
+  });
+});
+
+// ── Acción: Detener generación ─────────────────────────────────────────────
+btnStop.addEventListener("click", () => {
+  const cur = document.getElementById("summary-cursor");
+  if (cur) cur.remove();
+  setLoading(btnSummary, summarySpin, false);
+  btnSummary.disabled = false;
+  btnStop.classList.add("d-none");
+  btnSearch.disabled = false;
+  summaryText.textContent += "\n\n[Generación detenida por el usuario]";
+  btnCopy.classList.remove("d-none");
+});
+
+// ── Acción: Copiar resumen ──────────────────────────────────────────────────
+btnCopy.addEventListener("click", () => {
+  const text = summaryText.innerText || summaryText.textContent;
+  navigator.clipboard.writeText(text).then(() => {
+    btnCopy.textContent = "✅ Copiado";
+    setTimeout(() => { btnCopy.textContent = "📋 Copiar"; }, 2000);
+  });
+});
+
+// ── Enviar con Ctrl+Enter ──────────────────────────────────────────────────
+queryInput.addEventListener("keydown", (e) => {
+  if (e.ctrlKey && e.key === "Enter") btnSearch.click();
+});
+</script>
+{% endblock %}

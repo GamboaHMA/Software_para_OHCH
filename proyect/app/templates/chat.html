@@ -18,6 +18,8 @@
     display: flex;
     flex-direction: column;
     gap: 0.75rem;
+    min-height: 0;          /* permite encogerse en viewports pequeños */
+    overflow-y: auto;       /* barra si los controles no caben verticalmente */
   }
 
   /* ── Panel derecho: resultados ───────────────────────────────── */
@@ -27,19 +29,29 @@
     flex-direction: column;
     gap: 0.75rem;
     overflow: hidden;
+    min-height: 0;          /* clave: permite que los hijos flex se encojan */
+  }
+
+  /* ── Ambas tarjetas comparten el alto disponible al 50 / 50 ──── */
+  #docs-card,
+  #summary-card {
+    flex: 1 1 0;            /* reparten el espacio disponible por igual */
+    min-height: 0;          /* permite encoger por debajo del tamaño del contenido */
+    overflow: hidden;       /* evita que el contenido desborde la tarjeta */
+    display: flex;
+    flex-direction: column; /* para que card-body pueda crecer con flex:1 */
   }
 
   /* ── Área de resultados de documentos ────────────────────────── */
   #docs-results {
-    flex: 0 0 auto;
-    max-height: 40%;
-    overflow-y: auto;
+    flex: 1;                /* ocupa todo el alto libre dentro de la tarjeta */
+    overflow-y: auto;       /* barra de desplazamiento propia */
   }
 
   /* ── Área del resumen generado ───────────────────────────────── */
   #summary-area {
-    flex: 1;
-    overflow-y: auto;
+    flex: 1;                /* ocupa todo el alto libre dentro de la tarjeta */
+    overflow-y: auto;       /* barra de desplazamiento propia */
   }
 
   /* ── Texto del resumen ───────────────────────────────────────── */
@@ -226,7 +238,7 @@
     </div>
 
     {# ── Resumen generado ──────────────────────────────────────────────── #}
-    <div class="card shadow-sm flex-grow-1" id="summary-card">
+    <div class="card shadow-sm" id="summary-card">
       <div class="card-header bg-white d-flex justify-content-between align-items-center">
         <span class="fw-semibold small">📝 Resumen histórico</span>
         <button id="btn-copy" class="btn btn-outline-secondary btn-sm py-0 d-none"

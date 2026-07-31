@@ -38,3 +38,4 @@ informe_cambios_20260621.md
 Topic_models
 normalizate_nmf.py
 informe_cambios_chat.md
+.tfidf_index_cache.pkl

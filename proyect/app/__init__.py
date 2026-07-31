@@ -35,4 +35,20 @@ def create_app(config_object=None):
         from app import models  # noqa: F401
         db.create_all()
 
+        # Precalentar el índice TF-IDF en un hilo daemon para que el servidor
+        # quede listo sin esperar a la primera búsqueda del usuario.
+        # Si existe caché en disco con el mismo doc_count lo carga en segundos;
+        # si no, lo construye desde la DB y lo guarda para futuros reinicios.
+        import threading as _threading
+
+        def _warmup_tfidf():
+            with app.app_context():
+                try:
+                    from app.utils import tfidf_service
+                    tfidf_service.build_index()
+                except Exception as exc:
+                    print(f"[TF-IDF] Error en precalentamiento: {exc}", flush=True)
+
+        _threading.Thread(target=_warmup_tfidf, daemon=True, name="tfidf-warmup").start()
+
     return app

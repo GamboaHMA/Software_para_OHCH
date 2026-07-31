@@ -415,3 +415,238 @@ def chat_summary_stream():
             "X-Accel-Buffering": "no",
         },
     )
+
+
+# ── Búsqueda TF-IDF ───────────────────────────────────────────────────────────
+
+@bp.route("/busqueda")
+def tfidf_view():
+    """Página de búsqueda por palabras clave con TF-IDF."""
+    from app.utils import tfidf_service, chat_service
+    stats = tfidf_service.index_stats()
+    ollama_models = list(chat_service.OLLAMA_MODEL_CONFIGS.keys())
+    default_ollama = chat_service.DEFAULT_OLLAMA_MODEL
+    return render_template(
+        "tfidf_search.html",
+        index_stats=stats,
+        ollama_models=ollama_models,
+        default_ollama=default_ollama,
+    )
+
+
+@bp.route("/api/busqueda/search", methods=["POST"])
+def tfidf_search():
+    """
+    Endpoint de búsqueda por palabras clave con TF-IDF.
+
+    Recibe JSON con:
+        query       (str)   – palabras clave del usuario
+        threshold   (float) – umbral de similitud coseno [0, 1], default 0.05
+        max_results (int)   – máximo de documentos, default 50
+
+    Devuelve JSON con:
+        documents  – lista de {doc_id, db_id, title, date_raw, similarity, in_db}
+        total_found – número de documentos encontrados
+        index_stats – estadísticas del índice usado
+    """
+    from app.utils import tfidf_service
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    query       = (data.get("query") or "").strip()
+    threshold   = float(data.get("threshold", 0.05))
+    max_results = int(data.get("max_results", 50))
+
+    if not query:
+        return jsonify({"error": "La consulta no puede estar vacía"}), 400
+    if not (0.0 <= threshold <= 1.0):
+        return jsonify({"error": "El umbral debe estar entre 0 y 1"}), 400
+
+    results = tfidf_service.search(
+        query=query,
+        threshold=threshold,
+        max_results=max_results,
+    )
+
+    return jsonify({
+        "documents":   results,
+        "total_found": len(results),
+        "index_stats": tfidf_service.index_stats(),
+    })
+
+
+@bp.route("/api/busqueda/rebuild", methods=["POST"])
+def tfidf_rebuild():
+    """
+    Fuerza la reconstrucción del índice TF-IDF desde la base de datos.
+    Útil después de importar documentos nuevos o de editar textos OCR.
+    """
+    from app.utils import tfidf_service
+    tfidf_service.build_index(force=True)
+    return jsonify({"ok": True, "index_stats": tfidf_service.index_stats()})
+
+
+@bp.route("/api/busqueda/summary/stream", methods=["POST"])
+def tfidf_summary_stream():
+    """
+    Endpoint de resumen histórico con streaming SSE para la búsqueda TF-IDF.
+
+    Recibe JSON con:
+        query        (str)   – consulta del usuario
+        ollama_model (str)   – alias del modelo Ollama ('salamandra' o 'qwen')
+        threshold    (float) – umbral de similitud, default 0.05
+        max_docs     (int)   – máximo de documentos usados para el contexto, default 10
+
+    Emite eventos SSE:
+        {"type": "chunk", "text": "..."}
+        {"type": "done"}
+        {"type": "error", "msg": "..."}
+    """
+    import json as _json
+    from app.utils import tfidf_service, chat_service
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    query        = (data.get("query") or "").strip()
+    ollama_alias = (data.get("ollama_model") or tfidf_service.DEFAULT_OLLAMA_MODEL).strip()
+    threshold    = float(data.get("threshold", 0.05))
+    max_docs     = int(data.get("max_docs", 10))
+
+    if not query:
+        return jsonify({"error": "La consulta no puede estar vacía"}), 400
+    if ollama_alias not in chat_service.OLLAMA_MODEL_CONFIGS:
+        return jsonify({"error": f"Modelo Ollama no reconocido: {ollama_alias}"}), 400
+
+    results = tfidf_service.search(
+        query=query,
+        threshold=threshold,
+        max_results=max_docs,
+    )
+
+    def generate():
+        if not results:
+            yield (
+                "data: "
+                + _json.dumps(
+                    {"type": "error", "msg": "No se encontraron documentos relevantes para el umbral indicado."},
+                    ensure_ascii=False,
+                )
+                + "\n\n"
+            )
+            return
+
+        try:
+            for chunk_text in tfidf_service.stream_summary(
+                query=query,
+                results=results,
+                ollama_alias=ollama_alias,
+            ):
+                yield (
+                    "data: "
+                    + _json.dumps({"type": "chunk", "text": chunk_text}, ensure_ascii=False)
+                    + "\n\n"
+                )
+        except Exception as exc:
+            yield (
+                "data: "
+                + _json.dumps({"type": "error", "msg": str(exc)}, ensure_ascii=False)
+                + "\n\n"
+            )
+            return
+
+        yield "data: " + _json.dumps({"type": "done"}, ensure_ascii=False) + "\n\n"
+
+    return Response(
+        stream_with_context(generate()),
+        content_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ── Explorador de Temas (Topic Modeling) ──────────────────────────────────────
+
+@bp.route("/temas")
+def topics_view():
+    """Página de exploración de temas descubiertos por topic modeling."""
+    from app.utils.chat_service import list_available_models
+    models = list_available_models()
+    return render_template("topics.html", topic_models=models)
+
+
+@bp.route("/api/temas/cargar", methods=["POST"])
+def topics_load():
+    """
+    Carga un modelo pkl y devuelve todos los temas con sus palabras y documentos.
+
+    Recibe JSON con:
+        model_path        (str)   – ruta relativa al .pkl
+        n_words           (int)   – palabras por tema, default 15
+        top_n_docs        (int)   – documentos por tema, default 10
+        min_weight        (float) – peso mínimo para incluir un doc, default 0.20
+        multi_topic_ratio (float) – umbral de multi-tema, default 0.60
+
+    Devuelve JSON con:
+        config   – configuración del modelo
+        n_docs   – número total de documentos en el corpus
+        topics   – lista de temas enriquecidos con datos de la DB
+    """
+    from app.utils import topics_service
+    from app.models import Document
+
+    data = request.get_json(silent=True)
+    if not data:
+        return jsonify({"error": "Datos inválidos"}), 400
+
+    model_path        = (data.get("model_path") or "").strip()
+    n_words           = int(data.get("n_words", 15))
+    top_n_docs        = int(data.get("top_n_docs", 10))
+    min_weight        = float(data.get("min_weight", 0.20))
+    multi_topic_ratio = float(data.get("multi_topic_ratio", 0.60))
+
+    if not model_path:
+        return jsonify({"error": "Se debe especificar un modelo"}), 400
+
+    try:
+        result = topics_service.get_topics(
+            model_path        = model_path,
+            n_words           = n_words,
+            top_n_docs        = top_n_docs,
+            min_weight        = min_weight,
+            multi_topic_ratio = multi_topic_ratio,
+        )
+    except (FileNotFoundError, ValueError) as e:
+        return jsonify({"error": str(e)}), 404
+
+    # ── Enriquecer con datos de la DB en una sola consulta ────────────────
+    all_doc_ids = {
+        item["doc_id"]
+        for topic in result["topics"]
+        for item in topic["top_docs"]
+    }
+
+    db_map = {}
+    if all_doc_ids:
+        db_docs = Document.query.filter(
+            Document.doc_id.in_(list(all_doc_ids))
+        ).all()
+        db_map = {
+            d.doc_id: {"db_id": d.id, "title": d.title, "date_raw": d.date_raw}
+            for d in db_docs
+        }
+
+    for topic in result["topics"]:
+        for item in topic["top_docs"]:
+            db_info = db_map.get(item["doc_id"])
+            item["db_id"]    = db_info["db_id"]    if db_info else None
+            item["title"]    = db_info["title"]     if db_info else None
+            item["date_raw"] = db_info["date_raw"]  if db_info else None
+            item["in_db"]    = db_info is not None
+
+    return jsonify(result)

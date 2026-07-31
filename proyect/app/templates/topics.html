@@ -1,0 +1,557 @@
+{% extends "base.html" %}
+{% block title %}Explorador de Temas | Corpus Documental{% endblock %}
+
+{% block head %}
+<style>
+  /* ── Layout: sidebar fijo + contenido scrollable ──────────────── */
+  #topics-wrap {
+    display: flex;
+    gap: 1rem;
+    align-items: flex-start;
+  }
+
+  /* ── Panel izquierdo fijo ────────────────────────────────────── */
+  #controls-panel {
+    width: 280px;
+    flex-shrink: 0;
+    position: sticky;
+    top: 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.75rem;
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+  }
+
+  /* ── Panel derecho: scroll natural de la página ──────────────── */
+  #topics-panel {
+    flex: 1;
+    min-width: 0;
+  }
+
+  /* ── Chips de palabras ────────────────────────────────────────── */
+  .word-chip {
+    display: inline-block;
+    padding: 0.18rem 0.55rem;
+    border-radius: 99px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: #e7f1ff;
+    color: #0a367a;
+    margin: 0.15rem 0.1rem;
+    cursor: default;
+  }
+  .word-chip:hover {
+    background: #cfe2ff;
+  }
+
+  /* ── Barra de peso por documento ─────────────────────────────── */
+  .weight-bar-wrap {
+    height: 5px;
+    background: #e9ecef;
+    border-radius: 3px;
+    margin-top: 3px;
+  }
+  .weight-bar {
+    height: 100%;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #6610f2, #a370f7);
+    transition: width 0.35s ease;
+  }
+
+  /* ── Tarjeta de tema ─────────────────────────────────────────── */
+  .topic-card .card-header {
+    cursor: pointer;
+    user-select: none;
+  }
+  .topic-card .card-header:hover {
+    background: #f0f4ff !important;
+  }
+
+  /* ── Badge de multi-tema ─────────────────────────────────────── */
+  .multi-badge {
+    font-size: 0.65rem;
+    background: #fff3cd;
+    color: #664d03;
+    border: 1px solid #ffecb5;
+    border-radius: 0.3rem;
+    padding: 0.1rem 0.4rem;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+
+  /* ── Estado vacío ────────────────────────────────────────────── */
+  .empty-state {
+    color: #adb5bd;
+    font-size: 0.85rem;
+    text-align: center;
+    padding: 3rem 0;
+  }
+
+  /* ── Spinner ─────────────────────────────────────────────────── */
+  .spinner-sm {
+    width: 1rem;
+    height: 1rem;
+    border-width: 2px;
+  }
+
+  /* ── Filtro destacado ────────────────────────────────────────── */
+  .word-chip.highlight {
+    background: #ffe066;
+    color: #3a2e00;
+  }
+
+  /* ── Paginación de temas ─────────────────────────────────────── */
+  #topics-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+  }
+</style>
+{% endblock %}
+
+{% block content %}
+<div id="topics-wrap">
+
+  {# ════════════════════ PANEL IZQUIERDO: controles ════════════════════ #}
+  <div id="controls-panel">
+
+    {# ── Selección de modelo ──────────────────────────────────────────── #}
+    <div class="card shadow-sm">
+      <div class="card-header bg-white fw-semibold small">🧠 Modelo de temas</div>
+      <div class="card-body d-flex flex-column gap-3">
+
+        <div>
+          <label class="form-label" for="model-sel">Modelo (.pkl)</label>
+          <select id="model-sel" class="form-select form-select-sm">
+            {% if topic_models %}
+              {% for m in topic_models %}
+              <option value="{{ m.path }}">
+                {{ m.method }} · {{ m.n_topics }} temas · {{ m.name }}
+              </option>
+              {% endfor %}
+            {% else %}
+              <option value="">— No hay modelos disponibles —</option>
+            {% endif %}
+          </select>
+          <div class="form-text">Entrenados con <code>topic_modeling.py</code>.</div>
+        </div>
+
+        {# n_words #}
+        <div>
+          <label class="form-label" for="n-words-range">
+            Palabras por tema: <strong id="n-words-val">15</strong>
+          </label>
+          <input type="range" class="form-range" id="n-words-range"
+                 min="5" max="30" step="1" value="15">
+        </div>
+
+        {# top_n_docs #}
+        <div>
+          <label class="form-label" for="top-docs-sel">
+            Documentos por tema
+          </label>
+          <select id="top-docs-sel" class="form-select form-select-sm">
+            <option value="5">5 documentos</option>
+            <option value="10" selected>10 documentos</option>
+            <option value="15">15 documentos</option>
+            <option value="20">20 documentos</option>
+            <option value="30">30 documentos</option>
+            <option value="0">— Mostrar todos —</option>
+          </select>
+        </div>
+
+        {# min_weight #}
+        <div>
+          <label class="form-label" for="min-weight-range">
+            Peso mínimo doc: <strong id="min-weight-val">20%</strong>
+          </label>
+          <input type="range" class="form-range" id="min-weight-range"
+                 min="5" max="80" step="5" value="20">
+          <div class="form-text">
+            Documentos con menos peso que este valor se omiten.
+          </div>
+        </div>
+
+        {# multi_topic_ratio #}
+        <div>
+          <label class="form-label" for="multi-ratio-range">
+            Umbral multi-tema: <strong id="multi-ratio-val">60%</strong>
+          </label>
+          <input type="range" class="form-range" id="multi-ratio-range"
+                 min="40" max="95" step="5" value="60">
+          <div class="form-text">
+            Un documento se marca "multi-tema" si otro tema supera
+            este porcentaje del peso del tema dominante.
+          </div>
+        </div>
+
+        <button id="btn-load" class="btn btn-primary btn-sm"
+                {% if not topic_models %}disabled{% endif %}>
+          <span id="load-spin" class="spinner-border spinner-sm d-none" role="status"></span>
+          🔍 Cargar modelo
+        </button>
+
+      </div>
+    </div>
+
+    {# ── Estadísticas (visible tras cargar) ───────────────────────────── #}
+    <div class="card shadow-sm d-none" id="stats-card">
+      <div class="card-header bg-white fw-semibold small">📊 Resumen</div>
+      <div class="card-body small d-flex flex-column gap-1">
+        <div>Método: <strong id="stat-method">—</strong></div>
+        <div>Temas: <strong id="stat-topics">—</strong></div>
+        <div>Documentos: <strong id="stat-docs">—</strong></div>
+      </div>
+    </div>
+
+  </div>{# /controls-panel #}
+
+  {# ════════════════════ PANEL DERECHO: temas ════════════════════════════ #}
+  <div id="topics-panel">
+
+    {# ── Barra de filtro + paginación ─────────────────────────────────── #}
+    <div class="d-flex gap-2 mb-3 align-items-center d-none" id="filter-bar">
+      <input type="search" id="word-filter" class="form-control form-control-sm"
+             placeholder="Filtrar por palabra clave de un tema…" style="max-width:320px;">
+      <span class="text-muted small ms-auto" id="page-info"></span>
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" id="btn-prev">&#8249;</button>
+        <button class="btn btn-outline-secondary" id="btn-next">&#8250;</button>
+      </div>
+      <button class="btn btn-outline-secondary btn-sm" id="btn-expand-all"
+              title="Expandir/colapsar todos los documentos">↕ Todos</button>
+    </div>
+
+    {# ── Grid de tarjetas de temas ─────────────────────────────────────── #}
+    <div id="topics-grid">
+      <div class="empty-state">
+        Selecciona un modelo y haz clic en "Cargar modelo".
+      </div>
+    </div>
+
+    {# ── Barra de paginación inferior ──────────────────────────── #}
+    <div class="d-flex gap-2 mt-3 align-items-center justify-content-center d-none"
+         id="pagination-bottom">
+      <span class="text-muted small" id="page-info-bottom"></span>
+      <div class="btn-group btn-group-sm">
+        <button class="btn btn-outline-secondary" id="btn-prev-bottom">&#8249; Anterior</button>
+        <button class="btn btn-outline-secondary" id="btn-next-bottom">Siguiente &#8250;</button>
+      </div>
+    </div>
+
+  </div>{# /topics-panel #}
+
+</div>{# /topics-wrap #}
+{% endblock %}
+
+
+{% block scripts %}
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   topics.js — Explorador de temas topic modeling
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+// ── Elementos del DOM ──────────────────────────────────────────────────────
+const modelSel      = document.getElementById("model-sel");
+const nWordsRange   = document.getElementById("n-words-range");
+const nWordsVal     = document.getElementById("n-words-val");
+const topDocsSel    = document.getElementById("top-docs-sel");
+const minWRange     = document.getElementById("min-weight-range");
+const minWVal       = document.getElementById("min-weight-val");
+const multiRRange   = document.getElementById("multi-ratio-range");
+const multiRVal     = document.getElementById("multi-ratio-val");
+const btnLoad       = document.getElementById("btn-load");
+const loadSpin      = document.getElementById("load-spin");
+const statsCard     = document.getElementById("stats-card");
+const statMethod    = document.getElementById("stat-method");
+const statTopics    = document.getElementById("stat-topics");
+const statDocs      = document.getElementById("stat-docs");
+const topicsGrid    = document.getElementById("topics-grid");
+const filterBar     = document.getElementById("filter-bar");
+const wordFilter    = document.getElementById("word-filter");
+const pageInfo      = document.getElementById("page-info");
+const btnPrev       = document.getElementById("btn-prev");
+const btnNext       = document.getElementById("btn-next");
+const btnExpandAll     = document.getElementById("btn-expand-all");
+const paginationBottom = document.getElementById("pagination-bottom");
+const pageInfoBottom   = document.getElementById("page-info-bottom");
+const btnPrevBottom    = document.getElementById("btn-prev-bottom");
+const btnNextBottom    = document.getElementById("btn-next-bottom");
+
+// ── Estado ─────────────────────────────────────────────────────────────────
+let allTopics        = [];   // datos completos cargados del servidor
+let filteredTopics   = [];   // subconjunto tras filtro de palabras
+let currentPage      = 0;
+const PAGE_SIZE      = 15;   // temas por página
+let allExpanded      = false;
+
+// ── Sliders: actualizar labels ─────────────────────────────────────────────
+nWordsRange.addEventListener("input", () => nWordsVal.textContent = nWordsRange.value);
+minWRange.addEventListener  ("input", () => minWVal.textContent   = minWRange.value + "%");
+multiRRange.addEventListener("input", () => multiRVal.textContent = multiRRange.value + "%");
+
+// ── Cargar modelo ──────────────────────────────────────────────────────────
+btnLoad.addEventListener("click", async () => {
+  const modelPath = modelSel.value;
+  if (!modelPath) return;
+
+  // Mostrar spinner
+  loadSpin.classList.remove("d-none");
+  btnLoad.disabled = true;
+  topicsGrid.innerHTML = '<div class="empty-state">Cargando modelo…</div>';
+  filterBar.classList.add("d-none");
+  paginationBottom.classList.add("d-none");
+  statsCard.classList.add("d-none");
+
+  try {
+    const resp = await fetch("/api/temas/cargar", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model_path:        modelPath,
+        n_words:           parseInt(nWordsRange.value),
+        top_n_docs:        parseInt(topDocsSel.value),
+        min_weight:        parseInt(minWRange.value) / 100,
+        multi_topic_ratio: parseInt(multiRRange.value) / 100,
+      }),
+    });
+
+    if (!resp.ok) {
+      const err = await resp.json();
+      topicsGrid.innerHTML =
+        `<div class="alert alert-danger">${err.error || "Error al cargar el modelo"}</div>`;
+      return;
+    }
+
+    const data = await resp.json();
+    allTopics = data.topics || [];
+
+    // Actualizar estadísticas
+    statMethod.textContent = data.config.method ? data.config.method.toUpperCase() : "?";
+    statTopics.textContent = data.config.n_topics;
+    statDocs.textContent   = data.n_docs.toLocaleString();
+    statsCard.classList.remove("d-none");
+
+    // Renderizar temas
+    filteredTopics = allTopics;
+    currentPage    = 0;
+    renderPage();
+    filterBar.classList.remove("d-none");
+    paginationBottom.classList.remove("d-none");
+
+  } catch (e) {
+    topicsGrid.innerHTML =
+      `<div class="alert alert-danger">Error de red: ${e.message}</div>`;
+  } finally {
+    loadSpin.classList.add("d-none");
+    btnLoad.disabled = false;
+  }
+});
+
+// ── Filtro de palabras ─────────────────────────────────────────────────────
+let filterTimer = null;
+wordFilter.addEventListener("input", () => {
+  clearTimeout(filterTimer);
+  filterTimer = setTimeout(() => {
+    const q = wordFilter.value.trim().toLowerCase();
+    if (!q) {
+      filteredTopics = allTopics;
+    } else {
+      filteredTopics = allTopics.filter(t =>
+        t.words.some(w => w.includes(q)) ||
+        (t.label && t.label.toLowerCase().includes(q))
+      );
+    }
+    currentPage = 0;
+    renderPage();
+  }, 250);
+});
+
+// ── Paginación ─────────────────────────────────────────────────────────────
+btnPrev.addEventListener("click", () => {
+  if (currentPage > 0) { currentPage--; renderPage(); }
+});
+btnNext.addEventListener("click", () => {
+  const maxPage = Math.ceil(filteredTopics.length / PAGE_SIZE) - 1;
+  if (currentPage < maxPage) { currentPage++; renderPage(); }
+});btnPrevBottom.addEventListener("click", () => {
+  if (currentPage > 0) {
+    currentPage--;
+    renderPage();
+    filterBar.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
+btnNextBottom.addEventListener("click", () => {
+  const maxPage = Math.ceil(filteredTopics.length / PAGE_SIZE) - 1;
+  if (currentPage < maxPage) {
+    currentPage++;
+    renderPage();
+    filterBar.scrollIntoView({ behavior: "smooth", block: "start" });
+  }
+});
+// ── Expandir / colapsar todos ──────────────────────────────────────────────
+btnExpandAll.addEventListener("click", () => {
+  allExpanded = !allExpanded;
+  document.querySelectorAll(".topic-docs-collapse").forEach(el => {
+    const bsCollapse = bootstrap.Collapse.getOrCreateInstance(el, { toggle: false });
+    allExpanded ? bsCollapse.show() : bsCollapse.hide();
+  });
+  btnExpandAll.textContent = allExpanded ? "↕ Colapsar" : "↕ Todos";
+});
+
+// ── Renderizar página actual ────────────────────────────────────────────────
+function renderPage() {
+  const total    = filteredTopics.length;
+  const maxPage  = Math.max(0, Math.ceil(total / PAGE_SIZE) - 1);
+  currentPage    = Math.min(currentPage, maxPage);
+
+  const start = currentPage * PAGE_SIZE;
+  const slice = filteredTopics.slice(start, start + PAGE_SIZE);
+
+  pageInfo.textContent =
+    `Temas ${start + 1}–${Math.min(start + PAGE_SIZE, total)} de ${total}`;
+
+  btnPrev.disabled          = currentPage === 0;
+  btnNext.disabled           = currentPage >= maxPage;
+  pageInfoBottom.textContent = pageInfo.textContent;
+  btnPrevBottom.disabled     = currentPage === 0;
+  btnNextBottom.disabled     = currentPage >= maxPage;
+
+  const q = wordFilter.value.trim().toLowerCase();
+
+  if (slice.length === 0) {
+    topicsGrid.innerHTML =
+      '<div class="empty-state">Ningún tema coincide con el filtro.</div>';
+    return;
+  }
+
+  // Construir HTML para la página
+  const html = slice.map(topic => buildTopicCard(topic, q)).join("");
+  topicsGrid.innerHTML = html;
+}
+
+// ── Construir HTML de una tarjeta de tema ──────────────────────────────────
+function buildTopicCard(topic, filterWord) {
+  const collapseId = `collapse-topic-${topic.idx}`;
+  const headerId   = `header-topic-${topic.idx}`;
+
+  // Etiqueta legible: si existe y no está vacía se muestra destacada; si no,
+  // se muestra solo el número del tema.
+  const labelHtml = topic.label
+    ? `<span class="fw-semibold text-dark ms-1">${escHtml(topic.label)}</span>`
+    : "";
+
+  // Chips de palabras (destacar las que coinciden con el filtro)
+  const wordChips = topic.words.map(w => {
+    const hi = filterWord && w.includes(filterWord) ? " highlight" : "";
+    return `<span class="word-chip${hi}">${escHtml(w)}</span>`;
+  }).join("");
+
+  // Filas de documentos
+  const docRows = topic.top_docs.map(doc => buildDocRow(doc)).join("");
+  const docsTable = topic.top_docs.length === 0
+    ? `<p class="text-muted small mb-0 px-2 py-1">
+         Sin documentos con peso ≥ ${minWRange.value}%
+       </p>`
+    : `<div class="table-responsive">
+         <table class="table table-sm table-hover mb-0">
+           <thead class="table-light">
+             <tr>
+               <th>Documento</th>
+               <th>Título</th>
+               <th>Fecha</th>
+               <th style="width:12%">Peso en tema</th>
+               <th style="width:1%"></th>
+             </tr>
+           </thead>
+           <tbody>${docRows}</tbody>
+         </table>
+       </div>`;
+
+  return `
+    <div class="card shadow-sm topic-card">
+      <div class="card-header bg-white d-flex align-items-start gap-2
+                  justify-content-between py-2"
+           data-bs-toggle="collapse" data-bs-target="#${collapseId}"
+           aria-expanded="false" aria-controls="${collapseId}"
+           id="${headerId}">
+        <div class="d-flex flex-column gap-1 flex-grow-1 min-width-0">
+          <div class="d-flex align-items-center gap-2">
+            <span class="badge bg-primary rounded-pill flex-shrink-0">T${topic.idx + 1}</span>
+            ${labelHtml}
+          </div>
+          <div>${wordChips}</div>
+        </div>
+        <div class="d-flex align-items-center gap-2 flex-shrink-0 mt-1">
+          <span class="badge bg-light text-secondary border small">
+            ${topic.doc_count} docs
+          </span>
+          <span class="text-muted small">▾</span>
+        </div>
+      </div>
+      <div class="collapse topic-docs-collapse" id="${collapseId}">
+        <div class="card-body p-0">
+          ${docsTable}
+        </div>
+      </div>
+    </div>`;
+}
+
+// ── Construir fila de un documento ─────────────────────────────────────────
+function buildDocRow(doc) {
+  const pct    = Math.round(doc.weight * 100);
+  const barPct = Math.min(100, pct);  // ya está entre 0–100 por ser distribución
+
+  // Badge de multi-tema: muestra los otros temas con sus pesos
+  let multiBadge = "";
+  if (doc.other_topics && doc.other_topics.length > 0) {
+    const labels = doc.other_topics
+      .map(t => `T${t.idx + 1} (${Math.round(t.weight * 100)}%)`)
+      .join(", ");
+    multiBadge = `<span class="multi-badge ms-1" title="También pertenece a: ${escHtml(labels)}">
+                    ⚡ T${doc.other_topics.map(t => t.idx + 1).join(",")}
+                  </span>`;
+  }
+
+  const idCell = doc.in_db
+    ? `<a href="/documento/${doc.db_id}" target="_blank"
+          class="text-decoration-none fw-semibold text-primary">${escHtml(doc.doc_id)}</a>`
+    : `<span class="text-muted">${escHtml(doc.doc_id)}</span>`;
+
+  const title   = escHtml(doc.title    || "(sin título)");
+  const dateRaw = escHtml(doc.date_raw || "—");
+
+  const viewBtn = doc.in_db
+    ? `<a href="/documento/${doc.db_id}" target="_blank"
+         class="btn btn-outline-primary btn-sm py-0 px-1" title="Ver documento">👁</a>`
+    : "";
+
+  return `
+    <tr>
+      <td class="text-muted small align-middle ps-2">
+        ${idCell}${multiBadge}
+      </td>
+      <td class="small text-truncate align-middle" style="max-width:180px;" title="${title}">${title}</td>
+      <td class="small text-nowrap align-middle">${dateRaw}</td>
+      <td class="align-middle" style="min-width:90px;">
+        <span class="badge bg-light text-dark border" style="font-size:0.7rem;">${pct}%</span>
+        <div class="weight-bar-wrap">
+          <div class="weight-bar" style="width:${barPct}%"></div>
+        </div>
+      </td>
+      <td class="align-middle">${viewBtn}</td>
+    </tr>`;
+}
+
+// ── Escapar HTML para evitar XSS ───────────────────────────────────────────
+function escHtml(str) {
+  if (!str) return "";
+  return String(str)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+</script>
+{% endblock %}

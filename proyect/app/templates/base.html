@@ -29,6 +29,14 @@
           <a class="nav-link {{ 'active' if request.endpoint == 'main.chat_view' }}"
              href="{{ url_for('main.chat_view') }}">Chat</a>
         </li>
+        <li class="nav-item">
+          <a class="nav-link {{ 'active' if request.endpoint == 'main.tfidf_view' }}"
+             href="{{ url_for('main.tfidf_view') }}">Búsqueda</a>
+        </li>
+        <li class="nav-item">
+          <a class="nav-link {{ 'active' if request.endpoint == 'main.topics_view' }}"
+             href="{{ url_for('main.topics_view') }}">Temas</a>
+        </li>
       </ul>
       <div class="text-white-50 small d-none d-md-block">Flask · SQLite · PDF.js · Bootstrap</div>
     </div>
