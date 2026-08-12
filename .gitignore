@@ -39,3 +39,4 @@ Topic_models
 normalizate_nmf.py
 informe_cambios_chat.md
 .tfidf_index_cache.pkl
+muestras_pdfs

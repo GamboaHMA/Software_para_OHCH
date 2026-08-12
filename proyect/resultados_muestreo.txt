@@ -1,0 +1,60 @@
+======================================================================
+            INFORME ESTADÍSTICO DEL MUESTREO DE PDFs
+======================================================================
+  Población total (N):          15,584 documentos
+  Tamaño de la muestra (n):     400 documentos
+  Umbral de prueba (H0):        p ≤ 50%
+======================================================================
+
+CONTEOS TOTALES
+----------------------------------------------------------------------
+  Impresos:            373  (93.25 %)
+  Manuscritos:           7  (1.75 %)
+  Fotos:                20  (5.00 %)
+----------------------------------------------------------------------
+
+ESTADÍSTICA INFERENCIAL (para 'Impresos')
+----------------------------------------------------------------------
+  Proporción muestral (p):                 93.250 %
+  Error estándar (con corrección por FPC): 0.01238
+
+  Intervalo de confianza al 95 %:
+    Límite inferior: 90.82 %
+    Límite superior: 95.68 %
+
+  Prueba de hipótesis (H0: p ≤ 50% vs H1: p > 50%):
+    Estadístico Z:    34.9279
+    p-valor:          0.0000000000
+     Conclusión:     Se RECHAZA H0. La proporción de impresos es SIGNIFICATIVAMENTE mayor.
+----------------------------------------------------------------------
+
+ANÁLISIS POR GRUPOS (cada grupo de ~80 documentos)
+----------------------------------------------------------------------
+  Grupo  Impresos  Manus.  Fotos   % Impresos
+  -----  --------  ------  -----  -----------
+     1       74       1      5   92.5 %
+     2       72       2      6   90.0 %
+     3       74       1      5   92.5 %
+     4       77       1      2   96.2 %
+     5       76       2      2   95.0 %
+  -----  --------  ------  -----  -----------
+  Media de los grupos:                    93.2 %
+  Mínimo / Máximo:                        90.0 % / 96.2 %
+  Rango (diferencia máx - mín):          6.2 %
+
+  Interpretación: La baja variabilidad entre grupos (rango pequeño)
+     indica que el resultado es consistente en toda la colección.
+----------------------------------------------------------------------
+
+CONCLUSIÓN FINAL
+======================================================================
+  Con un 95 % de confianza, la proporción REAL de documentos impresos
+  en el archivo completo (N=15,584) está entre 
+  90.82 % y 95.68 %.
+
+  Dado que el límite inferior (90.82 %) es 
+  MAYOR que el umbral del 50%, podemos afirmar
+  ESTADÍSTICAMENTE que la GRAN MAYORÍA de los documentos son IMPRESOS.
+======================================================================
+
+  Informe generado automáticamente por 'analisis_muestreo.py'.
