@@ -15,6 +15,7 @@ corpus.db
 Reconstrucciones
 Reconstrucciones_perplexity
 Topic_results
+Topic_results_9000
 contador_de_txt.py
 .venv
 introduccion_tesis.tex
@@ -35,8 +36,16 @@ informe_procesamiento_de_docs.md
 informe_software.md
 informe_topic_modeling.md
 informe_cambios_20260621.md
+informe_inclusion_top2vec_bertopic.md
+Topic_models_9000
 Topic_models
 normalizate_nmf.py
 informe_cambios_chat.md
 .tfidf_index_cache.pkl
 muestras_pdfs
+.cache
+texto_extraido
+texto_corregido
+referencias_humanas
+Topic_visualizations
+Topic_experimental_results

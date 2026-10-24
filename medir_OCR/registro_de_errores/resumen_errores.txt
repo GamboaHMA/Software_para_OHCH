@@ -1,0 +1,23 @@
+Comparación de OCR antes y después de la postcorrección
+Referencia humana: /media/yoe/M.2/mio/escuela/11noSemestre/Tesis/Datos/Soft_para_doc_historica/medir_OCR/referencias_humanas
+Población N: 15,584 | muestra n: 100
+
+1) OCR original vs. referencia humana
+   Media ē: 445.57
+   Desviación estándar s: 486.61
+   Total estimado T̂: 6943762.88
+   IC 95%: [5443856.82, 8443668.94]
+
+2) Texto postcorregido vs. referencia humana
+   Media ē: 179.81
+   Desviación estándar s: 401.79
+   Total estimado T̂: 2802159.04
+   IC 95%: [1563687.26, 4040630.82]
+
+3) Mejora pareada (OCR menos postcorregido)
+   Reducción media de errores por archivo: 265.76
+   Reducción total estimada: 4141603.84
+   IC 95% de la reducción: [3059434.50, 5223773.18]
+   Mejora porcentual estimada: 59.64%
+
+Los intervalos usan t bilateral al 95% y corrección por población finita; la reducción se estima con diferencias pareadas por documento.

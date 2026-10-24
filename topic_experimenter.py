@@ -50,8 +50,21 @@ HIGH_CONF_THRESHOLD = 0.50
 
 def _infer_n_topics(filename: str) -> int | None:
     """Extrae el número de temas del nombre del archivo."""
-    m = re.search(r"(\d+)", filename)
-    return int(m.group(1)) if m else None
+    for marker in ("_topics", "-topics", "_topic", "-topic"):
+        prefix, separator, suffix = filename.partition(marker)
+        if separator and prefix.isdigit() and suffix[:1] in "_.-":
+            return int(prefix)
+    prefix, separator, _ = filename.partition("_")
+    if separator and prefix.isdigit():
+        return int(prefix)
+    return None
+
+
+def _infer_method(path: Path) -> str | None:
+    """Identifica el método por el nombre del resultado/modelo o sus carpetas."""
+    searchable = "_".join((path.stem, *path.parent.parts)).lower()
+    match = re.search(r"(?<![a-z])(top2vec|bertopic|lda|nmf)(?![a-z])", searchable)
+    return match.group(1) if match else None
 
 
 def load_csv(path: Path) -> list[dict]:
@@ -73,10 +86,107 @@ def load_csv(path: Path) -> list[dict]:
 # Carga de modelos .pkl
 # ---------------------------------------------------------------------------
 
-def load_model_pkl(path: Path) -> dict:
-    """Carga el estado de un modelo guardado con topic_modeling.py."""
+def _find_model_sidecar(path: Path, search_root: Path | None = None) -> Path | None:
+    """Encuentra el sidecar junto al modelo o en una subcarpeta organizada por método."""
+    adjacent = Path(f"{path}.metadata.pkl")
+    if adjacent.is_file():
+        return adjacent
+    if search_root is None or not search_root.is_dir():
+        return None
+
+    matches = list(search_root.rglob(f"{path.name}.metadata.pkl"))
+    if len(matches) == 1:
+        return matches[0]
+    method = _infer_method(path)
+    method_matches = [candidate for candidate in matches if method and candidate.parent.name.lower() == method]
+    if len(method_matches) == 1:
+        return method_matches[0]
+    return None
+
+
+def load_model_pkl(path: Path, metadata_path: Path | None = None) -> dict:
+    """Carga el estado y, para los formatos nativos, adjunta el modelo cargado."""
+    metadata_path = metadata_path or _find_model_sidecar(path, path.parent)
+    if metadata_path is not None:
+        with metadata_path.open("rb") as f:
+            state = pickle.load(f)
+        method = state.get("config", {}).get("method") or _infer_method(path)
+        # Estos archivos usan serialización nativa: no se deben abrir como pickle.
+        if method == "top2vec":
+            from top2vec import Top2Vec
+
+            state["model"] = Top2Vec.load(str(path))
+        elif method == "bertopic":
+            from bertopic import BERTopic
+
+            state["model"] = BERTopic.load(str(path))
+        else:
+            raise ValueError(f"Método nativo no reconocido en {metadata_path}: {method}")
+        return state
+
+    if _infer_method(path) in {"top2vec", "bertopic"}:
+        raise FileNotFoundError(
+            f"No se encontró el sidecar '{path.name}.metadata.pkl' junto al modelo "
+            f"ni en {path.parent}. Los modelos nativos requieren ese archivo de metadatos."
+        )
+
     with path.open("rb") as f:
-        return pickle.load(f)
+        state = pickle.load(f)
+    if not isinstance(state, dict):
+        raise ValueError(f"El archivo no contiene un estado de modelo compatible: {path}")
+    return state
+
+
+def _model_candidates(models_dir: Path) -> list[dict]:
+    """Enumera estados nativos y pickle convencionales, sin incluir sidecars."""
+    candidates = []
+    for path in sorted(models_dir.rglob("*")):
+        if not path.is_file() or path.name.endswith(".metadata.pkl"):
+            continue
+        if path.suffix.lower() not in {".pkl", ".pickle", ".model"}:
+            continue
+
+        sidecar = _find_model_sidecar(path, models_dir)
+        config = {}
+        metadata = {}
+        if sidecar is not None:
+            try:
+                with sidecar.open("rb") as f:
+                    metadata = pickle.load(f)
+                    config = metadata.get("config", {})
+            except Exception as exc:
+                print(f"  [WARN] No se pudo leer {sidecar.name}: {exc}")
+        method = config.get("method") or _infer_method(path)
+        topic_ids = metadata.get("topic_ids")
+        detected_topics = (
+            sum(1 for topic_id in topic_ids if int(topic_id) != -1)
+            if topic_ids else None
+        )
+        n_topics = config.get("n_topics") or detected_topics or _infer_n_topics(path.name)
+        if method:
+            candidates.append({
+                "path": path,
+                "method": method,
+                "n_topics": n_topics,
+                "metadata_path": sidecar,
+            })
+    return candidates
+
+
+def _match_model(csv_path: Path, candidates: list[dict], n_topics: int | None) -> dict | None:
+    """Asocia un CSV al modelo del mismo método y, si aplica, mismo n_topics."""
+    method = _infer_method(csv_path)
+    matches = [candidate for candidate in candidates if not method or candidate["method"] == method]
+    if n_topics is not None:
+        exact = [candidate for candidate in matches if candidate["n_topics"] == n_topics]
+        if exact:
+            matches = exact
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        names = ", ".join(candidate["path"].name for candidate in matches)
+        print(f"  [WARN] Asociación ambigua para {csv_path.name}; candidatos: {names}")
+    return None
 
 
 def extract_rows_from_state(state: dict) -> list[dict]:
@@ -89,10 +199,17 @@ def extract_rows_from_state(state: dict) -> list[dict]:
     matrix = state.get("doc_topic_matrix")
     if matrix is None:
         return []
+    topic_ids = state.get("topic_ids", list(range(matrix.shape[1])))
+    if len(doc_paths) != matrix.shape[0] or len(topic_ids) != matrix.shape[1]:
+        raise ValueError("doc_paths/topic_ids no coinciden con las dimensiones de doc_topic_matrix")
+    method = state.get("config", {}).get("method")
     rows = []
     for i, path_str in enumerate(doc_paths):
         dist = matrix[i]
-        dominant = int(dist.argmax()) + 1   # 1-indexed
+        column = int(dist.argmax())
+        # BERTopic necesita conservar -1 para los outliers; los demás métodos
+        # se reportan por rango de tópico (1-based), igual que los CSV.
+        dominant = int(topic_ids[column]) if method == "bertopic" else column + 1
         weight = float(dist.max())
         rows.append({
             "documento": Path(path_str).name,
@@ -108,8 +225,29 @@ def get_topic_words_from_state(state: dict, n_words: int) -> list[list[str]]:
     Devuelve una lista de listas, cada una con las top-n_words palabras de cada tópico.
     """
     model = state.get("model")
+    method = state.get("config", {}).get("method")
+    if model is None:
+        return []
+
+    if method == "top2vec":
+        words, _, _ = model.get_topics(
+            reduced=bool(state.get("top2vec_reduced", False))
+        )
+        return [[str(word) for word in topic[:n_words]] for topic in words]
+
+    if method == "bertopic":
+        topic_ids = model.get_topic_info()["Topic"].tolist()
+        result = []
+        for topic_id in topic_ids:
+            if int(topic_id) == -1:
+                continue
+            topic = model.get_topic(int(topic_id))
+            if topic:
+                result.append([str(word) for word, _ in topic[:n_words]])
+        return result
+
     vectorizer = state.get("vectorizer")
-    if model is None or vectorizer is None:
+    if vectorizer is None:
         return []
     feature_names = vectorizer.get_feature_names_out()
     components = model.components_   # shape (n_topics, n_features)
@@ -130,9 +268,9 @@ def compute_coherence_diversity(state: dict, n_words: int) -> tuple[float | None
         print("  [WARN] gensim no disponible, no se calculará coherencia.")
         return None, None
 
-    processed_texts = state.get("processed_texts")
-    if not processed_texts:
-        print("  [WARN] 'processed_texts' no encontrado en el modelo.")
+    texts = state.get("processed_texts") or state.get("raw_texts")
+    if not texts:
+        print("  [WARN] No se encontraron textos para calcular coherencia.")
         return None, None
 
     topic_words = get_topic_words_from_state(state, n_words)
@@ -140,8 +278,18 @@ def compute_coherence_diversity(state: dict, n_words: int) -> tuple[float | None
         print("  [WARN] No se pudieron obtener palabras de tópicos.")
         return None, None
 
-    # Tokenizar textos (cada texto es un string de palabras separadas por espacio)
-    tokenized_corpus = [text.split() for text in processed_texts]
+    # LDA/NMF guardan textos lematizados; Top2Vec/BERTopic guardan los originales.
+    if state.get("processed_texts"):
+        tokenized_corpus = [text.split() for text in texts]
+    else:
+        tokenized_corpus = [
+            re.findall(r"[^\W\d_]+", text.lower(), flags=re.UNICODE)
+            for text in texts
+        ]
+    tokenized_corpus = [tokens for tokens in tokenized_corpus if tokens]
+    if not tokenized_corpus:
+        print("  [WARN] No quedaron tokens para calcular coherencia.")
+        return None, None
 
     # Crear diccionario de Gensim a partir del corpus tokenizado
     dictionary = Dictionary(tokenized_corpus)
@@ -162,7 +310,7 @@ def compute_coherence_diversity(state: dict, n_words: int) -> tuple[float | None
     all_words = set()
     for topic in topic_words:
         all_words.update(topic)
-    total_words = len(topic_words) * n_words
+    total_words = sum(len(topic) for topic in topic_words)
     diversity = len(all_words) / total_words if total_words > 0 else 0.0
 
     return coherence, diversity
@@ -217,7 +365,8 @@ def _gini(values: list[float]) -> float:
 
 def compute_metrics(rows: list[dict], n_topics_total: int | None,
                     coherence: float | None = None,
-                    diversity: float | None = None) -> dict:
+                    diversity: float | None = None,
+                    topic_ids: list[int] | None = None) -> dict:
     """Calcula todas las métricas para un conjunto de filas."""
     if not rows:
         return {}
@@ -227,16 +376,23 @@ def compute_metrics(rows: list[dict], n_topics_total: int | None,
     avg_w   = _mean(weights)
     std_w   = _std(weights, avg_w)
 
-    # Conteos por tema
+    # Conteos por tema y métricas
     topic_counts: dict[int, int] = {}
     for r in rows:
         t = r["tema_dominante"]
         topic_counts[t] = topic_counts.get(t, 0) + 1
 
-    n_active = len(topic_counts)
-    n_total  = n_topics_total if n_topics_total else n_active
-
-    all_counts = [topic_counts.get(t, 0) for t in range(1, n_total + 1)]
+    # BERTopic reserva -1 para outliers: contarlos como cluster aparte
+    # falsearía cobertura, entropía y balance de los tópicos reales.
+    outlier_docs = topic_counts.get(-1, 0)
+    if topic_ids is not None:
+        modeled_topic_ids = [int(topic_id) for topic_id in topic_ids if int(topic_id) != -1]
+        all_counts = [topic_counts.get(topic_id, 0) for topic_id in modeled_topic_ids]
+    else:
+        modeled_topic_ids = list(range(1, (n_topics_total or len(topic_counts)) + 1))
+        all_counts = [topic_counts.get(topic_id, 0) for topic_id in modeled_topic_ids]
+    n_active = sum(1 for count in all_counts if count > 0)
+    n_total = n_topics_total if n_topics_total is not None else len(modeled_topic_ids)
 
     entropy    = _shannon_entropy_normalized(all_counts)
     gini       = _gini([float(c) for c in all_counts])
@@ -253,6 +409,8 @@ def compute_metrics(rows: list[dict], n_topics_total: int | None,
         "n_docs":           n_docs,
         "n_topics_total":   n_total,
         "n_active_topics":  n_active,
+        "n_outlier_docs":   outlier_docs,
+        "outlier_pct":      round(outlier_docs / n_docs * 100, 2),
         "avg_weight":       round(avg_w, 4),
         "weight_std":       round(std_w, 4),
         "weight_p25":       round(_percentile(weights, 25), 4),
@@ -364,14 +522,16 @@ def print_detailed(results: list[dict], show_per_topic: bool = False) -> None:
         print(f"  Archivo : {r['filename']}")
         print(f"  n_docs  : {m['n_docs']}   n_topics_total: {m['n_topics_total']}")
         print(f"{'─'*70}")
-        print(f"  Confianza de asignación (peso del tema dominante):")
+        print("  Confianza de asignación (peso del tema dominante):")
         print(f"    Media              : {m['avg_weight']:.4f}  {_bar(m['avg_weight'])}")
         print(f"    Std                : {m['weight_std']:.4f}")
         print(f"    P25 / P75          : {m['weight_p25']:.4f} / {m['weight_p75']:.4f}")
         print(f"    Baja conf (<0.30)  : {m['low_conf_pct']:.1f}%")
         print(f"    Alta conf (>0.50)  : {m['high_conf_pct']:.1f}%")
-        print(f"  Distribución de temas:")
+        print("  Distribución de temas:")
         print(f"    Temas activos      : {m['n_active_topics']} / {m['n_topics_total']}")
+        if m.get("n_outlier_docs", 0):
+            print(f"    Documentos outlier : {m['n_outlier_docs']} ({m['outlier_pct']:.1f}%)")
         print(f"    Cobertura          : {m['coverage_ratio']:.4f}  {_bar(m['coverage_ratio'])}")
         print(f"    Entropía norm.     : {m['topic_entropy']:.4f}  {_bar(m['topic_entropy'])}")
         print(f"    Gini               : {m['gini_coeff']:.4f}")
@@ -383,7 +543,7 @@ def print_detailed(results: list[dict], show_per_topic: bool = False) -> None:
         print(f"  Puntuación compuesta : {m['composite_score']:.4f}  {_bar(m['composite_score'])}")
 
         if show_per_topic and pt:
-            print(f"\n  Desglose por tema:")
+            print("\n  Desglose por tema:")
             print(f"    {'Tema':>5}  {'n_docs':>7}  {'avg_w':>7}  {'std_w':>7}  {'min':>6}  {'max':>6}")
             print(f"    {'─'*5}  {'─'*7}  {'─'*7}  {'─'*7}  {'─'*6}  {'─'*6}")
             for ts in pt:
@@ -406,16 +566,21 @@ def save_report(results: list[dict], output_path: str, criterion: str = "composi
     # Obtener todas las claves de métricas de los resultados
     fieldnames = ["filename"]
     if results:
-        sample_metrics = results[0]["metrics"]
         # Queremos un orden fijo: primero las básicas, luego coherencia/diversidad si existen
         base_fields = [
             "n_docs", "n_topics_total", "n_active_topics",
+            "n_outlier_docs", "outlier_pct",
             "avg_weight", "weight_std", "weight_p25", "weight_p75",
             "low_conf_pct", "high_conf_pct",
             "coverage_ratio", "topic_entropy", "gini_coeff", "balance_score",
             "composite_score"
         ]
-        extra_fields = [k for k in sample_metrics.keys() if k not in base_fields]
+        extra_fields = list(dict.fromkeys(
+            key
+            for result in results
+            for key in result["metrics"]
+            if key not in base_fields
+        ))
         fieldnames.extend(base_fields)
         fieldnames.extend(extra_fields)
 
@@ -448,7 +613,13 @@ def build_arg_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--models-dir",
         default=None,
-        help="Carpeta con los modelos .pkl (opcional). Si se da, calcula coherencia y diversidad.",
+        help="Carpeta de modelos .pkl/.pickle/.model (opcional); calcula coherencia y diversidad.",
+    )
+    p.add_argument(
+        "--model", "--model-name",
+        dest="model_name",
+        default=None,
+        help="Evalúa un solo modelo: ruta al archivo o nombre dentro de --models-dir/Topic_models.",
     )
     p.add_argument(
         "--output",
@@ -462,8 +633,8 @@ def build_arg_parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--pattern",
-        default="*_topics_result.csv",
-        help="Patrón glob para encontrar archivos de resultados (default: *_topics_result.csv).",
+        default="**/*.csv",
+        help="Patrón glob recursivo para resultados (default: **/*.csv).",
     )
     p.add_argument(
         "--n-words",
@@ -486,6 +657,67 @@ def build_arg_parser() -> argparse.ArgumentParser:
 if __name__ == "__main__":
     args = build_arg_parser().parse_args()
 
+    # Modo de evaluación individual: no requiere CSV de asignaciones previos.
+    if args.model_name:
+        models_root = Path(args.models_dir) if args.models_dir else DEFAULT_MODELS_DIR
+        requested_model = Path(args.model_name).expanduser()
+        if requested_model.is_file():
+            model_path = requested_model
+        else:
+            direct_candidate = models_root / requested_model
+            if direct_candidate.is_file():
+                model_path = direct_candidate
+            else:
+                matches = list(models_root.rglob(requested_model.name)) if models_root.is_dir() else []
+                if len(matches) == 1:
+                    model_path = matches[0]
+                elif len(matches) > 1:
+                    print(
+                        f"[ERROR] Nombre ambiguo '{args.model_name}'; indica la ruta completa "
+                        "o usa --models-dir para acotar la búsqueda.",
+                        file=sys.stderr,
+                    )
+                    sys.exit(1)
+                else:
+                    print(f"[ERROR] No se encontró el modelo: {args.model_name}", file=sys.stderr)
+                    sys.exit(1)
+
+        try:
+            state = load_model_pkl(
+                model_path,
+                _find_model_sidecar(model_path, models_root),
+            )
+            model_config = state.get("config", {})
+            method = model_config.get("method") or _infer_method(model_path) or "desconocido"
+            rows = extract_rows_from_state(state)
+            if not rows:
+                raise ValueError("El estado del modelo no contiene asignaciones documento-tópico.")
+
+            coherence, diversity = compute_coherence_diversity(state, args.n_words)
+            topic_ids = state.get("topic_ids") if method == "bertopic" else None
+            n_topics = model_config.get("n_topics")
+            if n_topics is None:
+                n_topics = len(topic_ids) if topic_ids else len({row["tema_dominante"] for row in rows})
+            metrics = compute_metrics(rows, n_topics, coherence, diversity, topic_ids)
+            result = [{
+                "filename": model_path.name,
+                "metrics": metrics,
+                "per_topic": [],
+            }]
+
+            print(f"[INFO] Modelo evaluado: {model_path} ({method.upper()})")
+            print_summary(result, criterion=args.criterio)
+            print_detailed(result, show_per_topic=args.per_topic)
+
+            output_path = args.output or str(
+                BASE_DIR / "Topic_experimental_results" / f"{model_path.stem}_metrics.csv"
+            )
+            save_report(result, output_path, criterion=args.criterio)
+        except Exception as exc:
+            print(f"[ERROR] No se pudo evaluar {model_path}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        sys.exit(0)
+
     results_dir = Path(args.results_dir)
     if not results_dir.exists():
         print(f"[ERROR] No existe la carpeta: {results_dir}", file=sys.stderr)
@@ -498,7 +730,7 @@ if __name__ == "__main__":
         sys.exit(1)
 
     # Buscar CSVs
-    csv_files = sorted(results_dir.glob(args.pattern))
+    csv_files = sorted(path for path in results_dir.glob(args.pattern) if path.is_file())
     if not csv_files:
         print(
             f"[ERROR] No se encontraron archivos con patrón '{args.pattern}' en {results_dir}",
@@ -508,11 +740,11 @@ if __name__ == "__main__":
 
     print(f"[INFO] {len(csv_files)} archivo(s) encontrado(s) en {results_dir}")
 
-    # Lista de modelos .pkl
-    pkl_files = []
+    # Modelos pickle y formatos nativos Top2Vec/BERTopic.
+    model_candidates = []
     if models_dir:
-        pkl_files = list(models_dir.glob("*_topics_*.pkl"))
-        print(f"[INFO] {len(pkl_files)} modelo(s) .pkl encontrados en {models_dir}")
+        model_candidates = _model_candidates(models_dir)
+        print(f"[INFO] {len(model_candidates)} modelo(s) compatibles encontrados en {models_dir}")
 
     results = []
 
@@ -522,26 +754,31 @@ if __name__ == "__main__":
             n_total = _infer_n_topics(csv_path.name)
             coherence = None
             diversity = None
+            topic_ids = None
 
-            if models_dir and pkl_files and n_total is not None:
-                # Buscar .pkl que tenga el número exacto de tópicos (usando regex)
-                matching_pkl = None
-                for pkl in pkl_files:
-                    # Extraer número del nombre del .pkl (ej. "20" de "20_topics_nmf.pkl")
-                    m = re.search(r"(\d+)_topics_", pkl.name)
-                    if m and int(m.group(1)) == n_total:
-                        matching_pkl = pkl
-                        break
-                if matching_pkl:
-                    state = load_model_pkl(matching_pkl)
-                    coherence, diversity = compute_coherence_diversity(state, args.n_words)
+            if models_dir and model_candidates:
+                matching_model = _match_model(csv_path, model_candidates, n_total)
+                if matching_model:
+                    if n_total is None:
+                        n_total = matching_model["n_topics"]
+                    try:
+                        state = load_model_pkl(
+                            matching_model["path"],
+                            matching_model["metadata_path"],
+                        )
+                        coherence, diversity = compute_coherence_diversity(state, args.n_words)
+                        rows = extract_rows_from_state(state)
+                        topic_ids = state.get("topic_ids")
+                        n_total = state.get("config", {}).get("n_topics", n_total)
+                    except Exception as exc:
+                        print(f"  [WARN] No se pudo analizar {matching_model['path'].name}: {exc}")
                     coherence_str = f"{coherence:.4f}" if coherence is not None else "N/A"
                     diversity_str = f"{diversity:.4f}" if diversity is not None else "N/A"
-                    print(f"  → Coherencia C_v: {coherence_str}, Diversidad: {diversity_str} para {matching_pkl.name}")
+                    print(f"  → Coherencia C_v: {coherence_str}, Diversidad: {diversity_str} para {matching_model['path'].name}")
                 else:
-                    print(f"  ⚠️  No se encontró .pkl para {csv_path.name} (n_topics={n_total})")
+                    print(f"  ⚠️  No se encontró un modelo inequívoco para {csv_path.name}")
 
-            metrics = compute_metrics(rows, n_total, coherence, diversity)
+            metrics = compute_metrics(rows, n_total, coherence, diversity, topic_ids)
             results.append({
                 "filename": csv_path.name,
                 "metrics": metrics,

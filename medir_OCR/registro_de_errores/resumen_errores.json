@@ -1,0 +1,50 @@
+{
+  "population_size": 15584,
+  "sample_size": 100,
+  "confidence_level": 0.95,
+  "reference": "/media/yoe/M.2/mio/escuela/11noSemestre/Tesis/Datos/Soft_para_doc_historica/medir_OCR/referencias_humanas",
+  "metric": "Distancia de Levenshtein por carácter contra la misma referencia humana",
+  "ocr_before_postcorrection": {
+    "population_size": 15584,
+    "sample_size": 100,
+    "mean_errors_per_document": 445.57,
+    "sample_standard_deviation": 486.60876066876966,
+    "finite_population_correction": 0.9968184001756953,
+    "standard_error_of_mean": 48.50605663213208,
+    "estimated_total_errors": 6943762.88,
+    "confidence_level": 0.95,
+    "confidence_interval_low": 5443856.815948648,
+    "confidence_interval_high": 8443668.944051351
+  },
+  "postcorrected": {
+    "population_size": 15584,
+    "sample_size": 100,
+    "mean_errors_per_document": 179.81,
+    "sample_standard_deviation": 401.7926420079357,
+    "finite_population_correction": 0.9968184001756953,
+    "standard_error_of_mean": 40.051429860871636,
+    "estimated_total_errors": 2802159.04,
+    "confidence_level": 0.95,
+    "confidence_interval_low": 1563687.2553764267,
+    "confidence_interval_high": 4040630.8246235736
+  },
+  "paired_error_reduction": {
+    "population_size": 15584,
+    "sample_size": 100,
+    "mean_errors_per_document": 265.76,
+    "sample_standard_deviation": 351.0840389767704,
+    "finite_population_correction": 0.9968184001756953,
+    "standard_error_of_mean": 34.99670300600457,
+    "estimated_total_errors": 4141603.84,
+    "confidence_level": 0.95,
+    "confidence_interval_low": 3059434.504764077,
+    "confidence_interval_high": 5223773.175235923,
+    "improvement_percent": 59.64494916623651
+  },
+  "formulas": {
+    "estimated_total": "T_hat=N*mean(e_i)",
+    "confidence_interval": "N*(mean(e_i) +/- t*s/sqrt(n)*sqrt((N-n)/(N-1)))",
+    "paired_reduction": "d_i=e_i_ocr-e_i_corregido; T_hat_reduccion=N*mean(d_i)"
+  },
+  "generated_at": "2026-10-12T12:58:32-04:00"
+}
