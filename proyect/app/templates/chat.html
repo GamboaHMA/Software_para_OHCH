@@ -136,7 +136,7 @@
             {% if topic_models %}
               {% for m in topic_models %}
               <option value="{{ m.path }}">
-                {{ m.method }} · {{ m.n_topics }} temas · {{ m.name }}
+                {{ m.method }}{% if m.n_topics %} · {{ m.n_topics }} temas{% endif %} · {{ m.name }}
               </option>
               {% endfor %}
             {% else %}
@@ -144,7 +144,7 @@
             {% endif %}
           </select>
           <div class="form-text">
-            Entrenados con <code>topic_modeling.py</code>. Más temas → más granularidad.
+            LDA/NMF proyectan la consulta en sus temas; BERTopic usa distribución aproximada. Los resultados incluyen la etiqueta del tema dominante.
           </div>
         </div>
 
@@ -324,6 +324,7 @@ function renderDocuments(docs) {
     '<th>ID Documento</th>' +
     '<th>Título</th>' +
     '<th>Fecha</th>' +
+    '<th>Tema</th>' +
     '<th style="width:12%">Similitud</th>' +
     '<th style="width:1%"></th>' +
     '</tr></thead><tbody>';
@@ -345,6 +346,7 @@ function renderDocuments(docs) {
         <td class="small">${idCell}</td>
         <td class="small text-truncate" style="max-width:200px;" title="${titleTxt}">${titleTxt}</td>
         <td class="small text-nowrap">${dateTxt}</td>
+        <td class="small">${doc.topic_label || "—"}</td>
         <td>
           <span class="sim-badge">${pct}%</span>
           <div class="sim-bar-wrap">

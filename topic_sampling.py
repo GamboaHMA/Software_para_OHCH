@@ -287,6 +287,53 @@ def plot_topic_similarity_matrix(modeler, title, output_file):
     print(f"  → Matriz de similitud guardada en {output_file}")
 
 
+def plot_bertopic_stopword_similarity(model_path, output_file):
+    """Grafica la similitud c-TF-IDF con stopwords sin persistir cambios al modelo."""
+    from sklearn.feature_extraction.text import CountVectorizer
+    from spacy.lang.es.stop_words import STOP_WORDS
+
+    from topic_modeling import STOPWORDS_EXTRA
+
+    modeler = HistoricalTopicModeler.load_model(model_path)
+    if modeler.method != "bertopic":
+        raise ValueError(f"El modelo no es BERTopic: {model_path}")
+
+    topics = getattr(modeler.model, "topics_", None)
+    if topics is None or len(topics) != len(modeler.raw_texts):
+        raise ValueError(f"No hay asignaciones alineadas con los textos en {model_path}")
+
+    # update_topics reconstruye únicamente las representaciones de los tópicos
+    # existentes; no ejecuta fit/fit_transform ni se guarda el objeto modificado.
+    modeler.model.update_topics(
+        modeler.raw_texts,
+        topics=list(topics),
+        top_n_words=modeler.n_words,
+        vectorizer_model=CountVectorizer(
+            stop_words=sorted(set(STOP_WORDS) | STOPWORDS_EXTRA),
+        ),
+    )
+    components = getattr(modeler.model, "c_tf_idf_", None)
+    if components is None or components.shape[0] < 2:
+        raise ValueError(f"No se generó una matriz c-TF-IDF válida para {model_path}")
+
+    sim_matrix = cosine_similarity(components)
+    plt.figure(figsize=(10, 8))
+    sns.heatmap(
+        sim_matrix,
+        annot=False,
+        cmap="coolwarm",
+        square=True,
+        xticklabels=[f"T{i + 1}" for i in range(sim_matrix.shape[0])],
+        yticklabels=[f"T{i + 1}" for i in range(sim_matrix.shape[0])],
+    )
+    plt.title(f"{COSINE_TOPIC_SIMILARITY_LABEL} (c-TF-IDF, sin stopwords)\n"
+              f"BERTopic | {modeler.n_topics} tópicos")
+    plt.tight_layout()
+    plt.savefig(output_file, dpi=150)
+    plt.close()
+    print(f"  → Matriz BERTopic con stopwords guardada en {output_file}")
+
+
 def visualize_model(model_path, bertopic_sample=0.1):
     """Carga un modelo guardado (incluidos los formatos nativos) y lo grafica."""
     modeler = HistoricalTopicModeler.load_model(model_path)

@@ -235,7 +235,10 @@ def ocr_stream(task_id):
 def chat_view():
     """Página principal del chat histórico."""
     from app.utils import chat_service
-    models = chat_service.list_available_models()
+    models = [
+        model for model in chat_service.list_available_models()
+        if model["method"] in {"LDA", "NMF", "BERTOPIC"}
+    ]
     ollama_models = list(chat_service.OLLAMA_MODEL_CONFIGS.keys())
     default_ollama = chat_service.DEFAULT_OLLAMA_MODEL
     return render_template(
@@ -288,6 +291,14 @@ def chat_search():
     except (FileNotFoundError, ValueError) as e:
         return jsonify({"error": str(e)}), 404
 
+    method = state.get("config", {}).get("method")
+    if method in {"lda", "nmf"} and state.get("vectorizer") is None:
+        return jsonify({"error": "El modelo de temas no tiene un vectorizador válido para el Chat."}), 400
+    if method not in {"lda", "nmf", "bertopic"}:
+        return jsonify({
+            "error": "El modelo de temas no tiene una estrategia de inferencia compatible con el Chat."
+        }), 400
+
     # Buscar documentos similares
     results = chat_service.find_relevant_documents(
         query=query,
@@ -298,12 +309,24 @@ def chat_search():
 
     # Enriquecer resultados con datos de la base de datos
     enriched = []
+    topic_labels = {}
+    try:
+        from app.utils.topics_service import _load_labels
+        topic_labels = _load_labels(model_path)
+    except (OSError, ValueError):
+        pass
+
     for item in results:
         db_doc = Document.query.filter_by(doc_id=item["doc_id"]).first()
         enriched.append({
             "doc_id":     item["doc_id"],
             "similarity": item["similarity"],
             "topic_idx":  item["topic_idx"],
+            "topic_label": topic_labels.get(
+                item["topic_idx"] if state.get("config", {}).get("method") == "bertopic"
+                else item["topic_idx"] + 1,
+                "",
+            ),
             "db_id":      db_doc.id    if db_doc else None,
             "title":      db_doc.title if db_doc else None,
             "date_raw":   db_doc.date_raw if db_doc else None,
@@ -363,6 +386,14 @@ def chat_summary_stream():
         state = chat_service.load_topic_model(model_path)
     except (FileNotFoundError, ValueError) as e:
         return jsonify({"error": str(e)}), 404
+
+    method = state.get("config", {}).get("method")
+    if method in {"lda", "nmf"} and state.get("vectorizer") is None:
+        return jsonify({"error": "El modelo de temas no tiene un vectorizador válido para el Chat."}), 400
+    if method not in {"lda", "nmf", "bertopic"}:
+        return jsonify({
+            "error": "El modelo de temas no tiene una estrategia de inferencia compatible con el Chat."
+        }), 400
 
     # Recuperar documentos relevantes para construir el contexto
     results = chat_service.find_relevant_documents(

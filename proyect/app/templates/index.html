@@ -11,13 +11,13 @@
         <form method="get" action="{{ url_for('main.index') }}">
           <div class="row g-2 align-items-end">
             <div class="col-12 col-md-4">
-              <label class="form-label form-label-sm">Búsqueda</label>
-              <input type="text" name="q" class="form-control form-control-sm"
+              <label for="search-query" class="form-label form-label-sm">Búsqueda</label>
+              <input id="search-query" type="text" name="q" class="form-control form-control-sm"
                      placeholder="Título, autor, ID o texto OCR" value="{{ search }}">
             </div>
             <div class="col-6 col-md-2">
-              <label class="form-label form-label-sm">Clasificación</label>
-              <select name="cls" class="form-select form-select-sm">
+              <label for="search-classification" class="form-label form-label-sm">Clasificación</label>
+              <select id="search-classification" name="cls" class="form-select form-select-sm">
                 <option value="">Todas</option>
                 {% for cls in classifications %}
                   <option value="{{ cls }}" {{ 'selected' if cls == current_cls }}>{{ cls }}</option>
@@ -25,8 +25,8 @@
               </select>
             </div>
             <div class="col-6 col-md-2">
-              <label class="form-label form-label-sm">Siglo</label>
-              <select name="c" class="form-select form-select-sm">
+              <label for="search-century" class="form-label form-label-sm">Siglo</label>
+              <select id="search-century" name="c" class="form-select form-select-sm">
                 <option value="">Todos</option>
                 {% for c in centuries %}
                   <option value="{{ c }}" {{ 'selected' if c == current_century }}>s. {{ c }}</option>
@@ -34,13 +34,13 @@
               </select>
             </div>
             <div class="col-4 col-md-1">
-              <label class="form-label form-label-sm">Desde</label>
-              <input type="number" name="df" class="form-control form-control-sm"
+              <label for="search-date-from" class="form-label form-label-sm">Desde</label>
+              <input id="search-date-from" type="number" name="df" class="form-control form-control-sm"
                      placeholder="1200" value="{{ date_from or '' }}">
             </div>
             <div class="col-4 col-md-1">
-              <label class="form-label form-label-sm">Hasta</label>
-              <input type="number" name="dt" class="form-control form-control-sm"
+              <label for="search-date-to" class="form-label form-label-sm">Hasta</label>
+              <input id="search-date-to" type="number" name="dt" class="form-control form-control-sm"
                      placeholder="1800" value="{{ date_to or '' }}">
             </div>
             <div class="col-4 col-md-2 d-flex gap-1">
@@ -125,7 +125,7 @@
   {# ---- Paginación ---- #}
   {% if pagination.pages > 1 %}
   <div class="col-12">
-    <nav>
+    <nav class="d-flex flex-column align-items-center gap-2">
       <ul class="pagination pagination-sm justify-content-center flex-wrap">
         <li class="page-item {{ 'disabled' if not pagination.has_prev }}">
           <a class="page-link" href="{{ url_for('main.index', page=pagination.prev_num,
@@ -146,6 +146,21 @@
              q=search, cls=current_cls, c=current_century, df=date_from, dt=date_to) }}">›</a>
         </li>
       </ul>
+      <form method="get" action="{{ url_for('main.index') }}"
+        class="d-flex align-items-center gap-2" aria-label="Ir a una página">
+        <input type="hidden" name="q" value="{{ search }}">
+        <input type="hidden" name="cls" value="{{ current_cls }}">
+        <input type="hidden" name="c" value="{{ current_century or '' }}">
+        <input type="hidden" name="df" value="{{ date_from or '' }}">
+        <input type="hidden" name="dt" value="{{ date_to or '' }}">
+        <label for="page-number" class="small text-muted text-nowrap">Ir a página</label>
+        <input id="page-number" type="number" name="page"
+           class="form-control form-control-sm" style="width: 90px"
+           min="1" max="{{ pagination.pages }}" value="{{ pagination.page }}"
+           required>
+        <button type="submit" class="btn btn-outline-primary btn-sm">Ir</button>
+        <span class="small text-muted">de {{ pagination.pages }}</span>
+      </form>
     </nav>
   </div>
   {% endif %}

@@ -220,7 +220,11 @@ def extract_rows_from_state(state: dict) -> list[dict]:
     return rows
 
 
-def get_topic_words_from_state(state: dict, n_words: int) -> list[list[str]]:
+def get_topic_words_from_state(
+    state: dict,
+    n_words: int,
+    remove_spanish_stopwords: bool = False,
+) -> list[list[str]]:
     """
     Devuelve una lista de listas, cada una con las top-n_words palabras de cada tópico.
     """
@@ -236,6 +240,37 @@ def get_topic_words_from_state(state: dict, n_words: int) -> list[list[str]]:
         return [[str(word) for word in topic[:n_words]] for topic in words]
 
     if method == "bertopic":
+        if remove_spanish_stopwords:
+            from sklearn.feature_extraction.text import CountVectorizer
+            from spacy.lang.es.stop_words import STOP_WORDS
+
+            model_topics = getattr(model, "topics_", None)
+            raw_texts = state.get("raw_texts") or []
+            if model_topics is None or len(model_topics) != len(raw_texts):
+                matrix = state.get("doc_topic_matrix")
+                topic_ids = state.get("topic_ids")
+                if matrix is None or topic_ids is None or len(raw_texts) != matrix.shape[0]:
+                    raise ValueError(
+                        "No se pudieron recuperar las asignaciones existentes de BERTopic."
+                    )
+                model_topics = [
+                    int(topic_ids[int(column)]) for column in matrix.argmax(axis=1)
+                ]
+
+            # Solo reconstruye las representaciones léxicas de los tópicos
+            # existentes; no vuelve a calcular embeddings ni ejecuta fit().
+            from topic_modeling import STOPWORDS_EXTRA
+
+            vectorizer = CountVectorizer(
+                stop_words=sorted(set(STOP_WORDS) | STOPWORDS_EXTRA),
+            )
+            model.update_topics(
+                raw_texts,
+                topics=list(model_topics),
+                top_n_words=n_words,
+                vectorizer_model=vectorizer,
+            )
+
         topic_ids = model.get_topic_info()["Topic"].tolist()
         result = []
         for topic_id in topic_ids:
@@ -259,7 +294,11 @@ def get_topic_words_from_state(state: dict, n_words: int) -> list[list[str]]:
     return topic_words
 
 
-def compute_coherence_diversity(state: dict, n_words: int) -> tuple[float | None, float | None]:
+def compute_coherence_diversity(
+    state: dict,
+    n_words: int,
+    remove_spanish_stopwords: bool = False,
+) -> tuple[float | None, float | None]:
     """
     Calcula la coherencia (C_v) y diversidad para un modelo cargado.
     Devuelve (coherence, diversity) o (None, None) si no es posible.
@@ -273,7 +312,9 @@ def compute_coherence_diversity(state: dict, n_words: int) -> tuple[float | None
         print("  [WARN] No se encontraron textos para calcular coherencia.")
         return None, None
 
-    topic_words = get_topic_words_from_state(state, n_words)
+    topic_words = get_topic_words_from_state(
+        state, n_words, remove_spanish_stopwords=remove_spanish_stopwords
+    )
     if not topic_words:
         print("  [WARN] No se pudieron obtener palabras de tópicos.")
         return None, None
@@ -643,6 +684,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Número de palabras por tópico para coherencia y diversidad (default: 10).",
     )
     p.add_argument(
+        "--spanish-stopwords",
+        action="store_true",
+        help=(
+            "Para BERTopic, actualiza solo las palabras representativas con "
+            "CountVectorizer y stopwords españolas; no reentrena el modelo."
+        ),
+    )
+    p.add_argument(
         "--criterio",
         default="composite_score",
         help="Métrica para ordenar y guardar el reporte (ej: composite_score, coherence, diversity, avg_weight).",
@@ -693,7 +742,11 @@ if __name__ == "__main__":
             if not rows:
                 raise ValueError("El estado del modelo no contiene asignaciones documento-tópico.")
 
-            coherence, diversity = compute_coherence_diversity(state, args.n_words)
+            coherence, diversity = compute_coherence_diversity(
+                state,
+                args.n_words,
+                remove_spanish_stopwords=args.spanish_stopwords,
+            )
             topic_ids = state.get("topic_ids") if method == "bertopic" else None
             n_topics = model_config.get("n_topics")
             if n_topics is None:
@@ -766,7 +819,11 @@ if __name__ == "__main__":
                             matching_model["path"],
                             matching_model["metadata_path"],
                         )
-                        coherence, diversity = compute_coherence_diversity(state, args.n_words)
+                        coherence, diversity = compute_coherence_diversity(
+                            state,
+                            args.n_words,
+                            remove_spanish_stopwords=args.spanish_stopwords,
+                        )
                         rows = extract_rows_from_state(state)
                         topic_ids = state.get("topic_ids")
                         n_total = state.get("config", {}).get("n_topics", n_total)

@@ -6,7 +6,7 @@ por tema interactuando con chat.deepseek.com vía Selenium/undetected-chromedriv
 igual que procesar_todos_deepseek.py.  No requiere API key.
 
 Dos variantes:
-  top_words  — input: las palabras más relevantes del tema (LDA/NMF)
+    top_words  — input: las palabras más relevantes del tema
   top_docs   — input: fragmentos de los documentos con mayor peso en el tema
   both       — corre ambas y devuelve las dos etiquetas para comparar
 
@@ -16,7 +16,7 @@ Uso rápido:
 Opciones:
     --corpus-dir     Ruta a la carpeta raíz de los documentos
     --n-topics       Número de temas (default: 10)
-    --method         lda | nmf (default: lda)
+    --method         lda | nmf | bertopic (default: lda)
     --label-method   top_words | top_docs | both (default: top_words)
     --n-words        Palabras top por tema (default: 15)
     --top-n-docs     Docs representativos para variante top_docs (default: 3)
@@ -32,6 +32,8 @@ from pathlib import Path
 
 from topic_modeling import DEFAULT_CORPUS_DIR, HistoricalTopicModeler
 from procesar_todos_deepseek import DeepSeekBot
+
+BASE_DIR = Path(__file__).parent
 
 # Fragmento máximo (caracteres) por documento en la variante top_docs
 MAX_FRAGMENT_CHARS = 800
@@ -49,7 +51,7 @@ Eres un especialista en historia hispanohablante (siglos XVI–XX) \
 y en análisis de corpus documentales.
 
 Se te proporcionan las palabras clave más representativas de un tema \
-latente descubierto mediante análisis estadístico (LDA/NMF) sobre un corpus \
+latente descubierto mediante análisis estadístico sobre un corpus \
 de documentos históricos en español.
 
 Palabras clave del tema:
@@ -71,7 +73,7 @@ Eres un especialista en historia hispanohablante (siglos XVI–XX) \
 y en análisis de corpus documentales.
 
 Los siguientes fragmentos provienen de los documentos más representativos \
-de un tema latente descubierto mediante análisis estadístico (LDA/NMF) \
+de un tema latente descubierto mediante análisis estadístico \
 sobre un corpus de documentos históricos en español.
 
 {fragments}
@@ -134,13 +136,110 @@ class TopicLabeler:
         self.delay = delay
 
         self._bot: DeepSeekBot | None = None
+        self.topic_specs = self._build_topic_specs()
+        if self.modeler.method == "bertopic":
+            self._refresh_bertopic_representations()
+
+    def _build_topic_specs(self) -> list[dict[str, int]]:
+        """Relaciona el ID visible del tema con su columna en doc_topic_matrix."""
+        matrix = self.modeler.doc_topic_matrix
+        if matrix is None:
+            raise RuntimeError("El modeler no contiene la matriz documento-tema.")
+
+        if self.modeler.method == "bertopic":
+            topic_ids = list(self.modeler.topic_ids)
+            if len(topic_ids) != matrix.shape[1]:
+                raise ValueError(
+                    "Los IDs BERTopic no coinciden con las columnas de doc_topic_matrix."
+                )
+            return [
+                {"topic_id": int(topic_id), "column_idx": column_idx}
+                for column_idx, topic_id in enumerate(topic_ids)
+                if int(topic_id) != -1
+            ]
+
+        return [
+            {"topic_id": idx + 1, "column_idx": idx}
+            for idx in range(matrix.shape[1])
+        ]
+
+    def _refresh_bertopic_representations(self) -> None:
+        """Actualiza las palabras BERTopic excluyendo stopwords españolas.
+
+        Conserva los clústeres existentes: no recalcula embeddings ni ejecuta
+        fit(), solo reconstruye sus representaciones léxicas.
+        """
+        from sklearn.feature_extraction.text import CountVectorizer
+        from spacy.lang.es.stop_words import STOP_WORDS
+        from topic_modeling import STOPWORDS_EXTRA
+
+        model = self.modeler.model
+        raw_texts = self.modeler.raw_texts
+        model_topics = getattr(model, "topics_", None)
+        if model_topics is None or len(model_topics) != len(raw_texts):
+            matrix = self.modeler.doc_topic_matrix
+            topic_ids = self.modeler.topic_ids
+            if matrix is None or len(raw_texts) != matrix.shape[0]:
+                raise ValueError(
+                    "No se pudieron recuperar las asignaciones existentes de BERTopic."
+                )
+            if len(topic_ids) != matrix.shape[1]:
+                raise ValueError(
+                    "Los IDs BERTopic no coinciden con las columnas de doc_topic_matrix."
+                )
+            model_topics = [
+                int(topic_ids[int(column)]) for column in matrix.argmax(axis=1)
+            ]
+
+        vectorizer = CountVectorizer(
+            stop_words=sorted(set(STOP_WORDS) | STOPWORDS_EXTRA),
+        )
+        model.update_topics(
+            raw_texts,
+            topics=[int(topic_id) for topic_id in model_topics],
+            top_n_words=self.n_words,
+            vectorizer_model=vectorizer,
+        )
+
+    def _prepare_results(self, output_path: str | None, *, both: bool) -> list[dict]:
+        """Crea o reanuda resultados, alineándolos por el ID real del tema."""
+        fields = ("label_top_words", "label_top_docs") if both else ("label",)
+        existing_by_id: dict[int, dict] = {}
+        if output_path and Path(output_path).exists():
+            with Path(output_path).open("r", encoding="utf-8") as stream:
+                existing = json.load(stream)
+            existing_by_id = {
+                int(item["topic_id"]): item
+                for item in existing
+                if "topic_id" in item
+            }
+            print(f"[INFO] Reanudando desde archivo existente: {output_path}")
+
+        results = []
+        for spec in self.topic_specs:
+            topic_id = spec["topic_id"]
+            entry = existing_by_id.get(topic_id, {"topic_id": topic_id})
+            for field in fields:
+                entry.setdefault(field, "")
+            entry["top_words"] = self._get_top_words(len(results))
+            results.append(entry)
+
+        if output_path and not existing_by_id:
+            self.save_labels(results, output_path)
+            print(f"[INFO] JSON inicial creado en: {output_path}")
+        return results
 
     # ------------------------------------------------------------------
     # Helpers de extracción
     # ------------------------------------------------------------------
 
     def _get_top_words(self, topic_idx: int) -> list[str]:
-        """Devuelve las top-N palabras del tema topic_idx."""
+        """Devuelve las top-N palabras del tema según el método de modelado."""
+        if self.modeler.method == "bertopic":
+            topic_id = self.topic_specs[topic_idx]["topic_id"]
+            topic = self.modeler.model.get_topic(topic_id) or []
+            return [str(word) for word, _ in topic[: self.n_words]]
+
         feature_names = self.modeler.vectorizer.get_feature_names_out()
         topic = self.modeler.model.components_[topic_idx]
         top_indices = topic.argsort()[: -self.n_words - 1 : -1]
@@ -151,7 +250,8 @@ class TopicLabeler:
         Devuelve los (fragmento, peso) de los top_n_docs documentos con
         mayor peso en el tema topic_idx.
         """
-        col = self.modeler.doc_topic_matrix[:, topic_idx]
+        column_idx = self.topic_specs[topic_idx]["column_idx"]
+        col = self.modeler.doc_topic_matrix[:, column_idx]
         top_doc_indices = col.argsort()[::-1][: self.top_n_docs]
         fragments = []
         for doc_idx in top_doc_indices:
@@ -221,27 +321,11 @@ class TopicLabeler:
         vacíos y lo actualiza tras cada consulta. Si el archivo ya existe,
         reanuda desde donde se dejó (omite temas ya etiquetados).
 
-        Devuelve lista de dicts: topic_id, label, top_words.
+        Devuelve lista de dicts: topic_id, label, top_words. Para BERTopic,
+        topic_id conserva el ID real del modelo y se omite el ID -1 (outliers).
         """
-        n_topics = self.modeler.n_topics
-
-        # Inicializar o reanudar desde JSON existente
-        if output_path and Path(output_path).exists():
-            with Path(output_path).open("r", encoding="utf-8") as f:
-                results = json.load(f)
-            print(f"[INFO] Reanudando desde archivo existente: {output_path}")
-        else:
-            results = [
-                {
-                    "topic_id": i + 1,
-                    "label": "",
-                    "top_words": self._get_top_words(i),
-                }
-                for i in range(n_topics)
-            ]
-            if output_path:
-                self.save_labels(results, output_path)
-                print(f"[INFO] JSON inicial creado en: {output_path}")
+        n_topics = len(self.topic_specs)
+        results = self._prepare_results(output_path, both=False)
 
         print(
             f"[INFO] Etiquetando {n_topics} temas "
@@ -249,8 +333,8 @@ class TopicLabeler:
         )
 
         for topic_idx in range(n_topics):
-            topic_num = topic_idx + 1
             entry = results[topic_idx]
+            topic_num = entry["topic_id"]
 
             # Si ya tiene etiqueta, imprimir y continuar
             if entry["label"]:
@@ -293,33 +377,16 @@ class TopicLabeler:
         reanuda desde donde se dejó (omite temas ya etiquetados en cada variante).
 
         Devuelve lista de dicts: topic_id, label_top_words, label_top_docs, top_words.
+        Para BERTopic se conserva el ID real del modelo y se omite -1 (outliers).
         """
-        n_topics = self.modeler.n_topics
-
-        # Inicializar o reanudar desde JSON existente
-        if output_path and Path(output_path).exists():
-            with Path(output_path).open("r", encoding="utf-8") as f:
-                results = json.load(f)
-            print(f"[INFO] Reanudando desde archivo existente: {output_path}")
-        else:
-            results = [
-                {
-                    "topic_id": i + 1,
-                    "label_top_words": "",
-                    "label_top_docs": "",
-                    "top_words": self._get_top_words(i),
-                }
-                for i in range(n_topics)
-            ]
-            if output_path:
-                self.save_labels(results, output_path)
-                print(f"[INFO] JSON inicial creado en: {output_path}")
+        n_topics = len(self.topic_specs)
+        results = self._prepare_results(output_path, both=True)
 
         print(f"[INFO] Etiquetando {n_topics} temas con AMBAS variantes…")
 
         for topic_idx in range(n_topics):
-            topic_num = topic_idx + 1
             entry = results[topic_idx]
+            topic_num = entry["topic_id"]
             changed = False
 
             # — Variante top_words —
@@ -410,8 +477,14 @@ def build_arg_parser() -> argparse.ArgumentParser:
         help="Número de temas (default: 10)",
     )
     p.add_argument(
+        "--min-document-words",
+        type=int,
+        default=50,
+        help="Mínimo de palabras alfabéticas por documento al entrenar (default: 50)",
+    )
+    p.add_argument(
         "--method",
-        choices=["lda", "nmf"],
+        choices=["lda", "nmf", "bertopic"],
         default="lda",
         help="Algoritmo de topic modeling (default: lda)",
     )
@@ -454,9 +527,15 @@ def build_arg_parser() -> argparse.ArgumentParser:
         "--model",
         default=None,
         metavar="PKL",
-        help="Ruta a un .pkl guardado por topic_modeling.py. "
+        help="Ruta a un modelo guardado por topic_modeling.py. "
              "Si se indica, omite el entrenamiento y carga el modelo directamente. "
-             "Ej: Topic_models/10_topics_lda.pkl",
+             "Para BERTopic debe existir también su archivo .metadata.pkl.",
+    )
+    p.add_argument(
+        "--min-topic-size",
+        type=int,
+        default=10,
+        help="Tamaño mínimo del clúster al entrenar BERTopic (default: 10)",
     )
     return p
 
@@ -466,6 +545,7 @@ if __name__ == "__main__":
 
     if args.model:
         modeler = HistoricalTopicModeler.load_model(args.model)
+        default_output = BASE_DIR / "Topic_results" / f"{Path(args.model).stem}_labels.json"
     else:
         corpus_dir = args.corpus_dir or DEFAULT_CORPUS_DIR
         modeler = HistoricalTopicModeler(
@@ -473,8 +553,16 @@ if __name__ == "__main__":
             n_topics=args.n_topics,
             method=args.method,
             n_words=args.n_words,
+            min_topic_size=args.min_topic_size,
+            min_document_words=args.min_document_words,
         )
         modeler.fit()
+        if modeler.method == "bertopic":
+            output_stem = f"bertopic_min_topic_size_{modeler.min_topic_size}"
+        else:
+            output_stem = f"{modeler.n_topics}_topics_{modeler.method}"
+        default_output = BASE_DIR / "Topic_results" / f"{output_stem}_labels.json"
+    output_path = args.output or str(default_output)
     modeler.print_topics()
 
     labeler = TopicLabeler(
@@ -490,13 +578,12 @@ if __name__ == "__main__":
 
     try:
         if args.label_method == "both":
-            results = labeler.label_all_both(output_path=args.output)
+            results = labeler.label_all_both(output_path=output_path)
         else:
-            results = labeler.label_all_topics(output_path=args.output)
+            results = labeler.label_all_topics(output_path=output_path)
     finally:
         labeler.stop_browser()
 
     labeler.print_labels(results)
 
-    if args.output:
-        labeler.save_labels(results, args.output)
+    labeler.save_labels(results, output_path)

@@ -127,7 +127,7 @@
             {% if topic_models %}
               {% for m in topic_models %}
               <option value="{{ m.path }}">
-                {{ m.method }} · {{ m.n_topics }} temas · {{ m.name }}
+                {{ m.method }}{% if m.n_topics %} · {{ m.n_topics }} temas{% endif %} · {{ m.name }}
               </option>
               {% endfor %}
             {% else %}
@@ -436,11 +436,7 @@ function buildTopicCard(topic, filterWord) {
   const collapseId = `collapse-topic-${topic.idx}`;
   const headerId   = `header-topic-${topic.idx}`;
 
-  // Etiqueta legible: si existe y no está vacía se muestra destacada; si no,
-  // se muestra solo el número del tema.
-  const labelHtml = topic.label
-    ? `<span class="fw-semibold text-dark ms-1">${escHtml(topic.label)}</span>`
-    : "";
+  const topicName = topic.label || `Tema ${topic.topic_id ?? topic.idx + 1}`;
 
   // Chips de palabras (destacar las que coinciden con el filtro)
   const wordChips = topic.words.map(w => {
@@ -478,8 +474,10 @@ function buildTopicCard(topic, filterWord) {
            id="${headerId}">
         <div class="d-flex flex-column gap-1 flex-grow-1 min-width-0">
           <div class="d-flex align-items-center gap-2">
-            <span class="badge bg-primary rounded-pill flex-shrink-0">T${topic.idx + 1}</span>
-            ${labelHtml}
+            <span class="badge bg-primary rounded-pill flex-shrink-0 text-wrap text-start"
+                  title="Identificador del tema: ${escHtml(topic.topic_id ?? topic.idx + 1)}">
+              ${escHtml(topicName)}
+            </span>
           </div>
           <div>${wordChips}</div>
         </div>
@@ -507,10 +505,10 @@ function buildDocRow(doc) {
   let multiBadge = "";
   if (doc.other_topics && doc.other_topics.length > 0) {
     const labels = doc.other_topics
-      .map(t => `T${t.idx + 1} (${Math.round(t.weight * 100)}%)`)
+      .map(t => `${t.label || `Tema ${t.topic_id ?? t.idx + 1}`} (${Math.round(t.weight * 100)}%)`)
       .join(", ");
     multiBadge = `<span class="multi-badge ms-1" title="También pertenece a: ${escHtml(labels)}">
-                    ⚡ T${doc.other_topics.map(t => t.idx + 1).join(",")}
+                    ⚡ ${escHtml(doc.other_topics.map(t => t.label || `Tema ${t.topic_id ?? t.idx + 1}`).join(", "))}
                   </span>`;
   }
 

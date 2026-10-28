@@ -105,14 +105,28 @@ def list_available_models() -> list[dict]:
     if not MODELS_ROOT.exists():
         return results
 
-    # Recorre subcarpetas (lda/, nmf/) y la raíz por compatibilidad
-    for pkl_file in sorted(MODELS_ROOT.rglob("*.pkl")):
+    # Los sidecars .metadata.pkl no son modelos; los artefactos nativos BERTopic
+    # se guardan como .pickle y requieren su sidecar para reconstruir el estado.
+    model_files = [
+        path for path in MODELS_ROOT.rglob("*.pkl")
+        if not path.name.endswith(".metadata.pkl")
+    ]
+    model_files.extend(
+        path for path in MODELS_ROOT.rglob("*.pickle")
+        if Path(f"{path}.metadata.pkl").is_file()
+        and "bertopic" in path.name.lower()
+    )
+
+    for pkl_file in sorted(model_files):
         stem = pkl_file.stem                       # ej. "100_topics_lda"
         # Intentar extraer n_topics y method del nombre de archivo
         m = re.match(r"(\d+)_topics_(lda|nmf)", stem)
         if m:
             n_topics = int(m.group(1))
             method   = m.group(2).upper()
+        elif "bertopic" in stem.lower():
+            n_topics = None  # BERTopic descubre el número de temas al entrenar.
+            method   = "BERTOPIC"
         else:
             n_topics = None
             method   = "?"
@@ -154,18 +168,73 @@ def load_topic_model(relative_path: str) -> dict:
     except ValueError:
         raise ValueError(f"Ruta de modelo no permitida: {relative_path}")
 
-    if not abs_path.exists():
+    if not abs_path.is_file():
         raise FileNotFoundError(f"Modelo no encontrado: {abs_path}")
 
     key = str(abs_path)
 
     with _model_cache_lock:
         if key not in _model_cache:
-            with abs_path.open("rb") as f:
-                state = pickle.load(f)
+            sidecar_path = Path(f"{abs_path}.metadata.pkl")
+            if sidecar_path.is_file() and "bertopic" in abs_path.name.lower():
+                with sidecar_path.open("rb") as f:
+                    state = pickle.load(f)
+                try:
+                    from bertopic import BERTopic
+                except ImportError as exc:
+                    raise ValueError(
+                        "Para cargar este modelo instala la dependencia bertopic."
+                    ) from exc
+                state["model"] = BERTopic.load(str(abs_path))
+            else:
+                with abs_path.open("rb") as f:
+                    state = pickle.load(f)
             _model_cache[key] = state
 
     return _model_cache[key]
+
+
+def ensure_bertopic_stopwords(state: dict) -> None:
+    """Reconstruye c-TF-IDF de BERTopic con las stopwords usadas en evaluación.
+
+    Mantiene las asignaciones existentes y ejecuta la actualización una sola
+    vez por estado cacheado. Esto también hace que approximate_distribution()
+    filtre las consultas mediante el vectorizador actualizado.
+    """
+    if state.get("config", {}).get("method") != "bertopic":
+        return
+    if state.get("_ui_stopwords_applied"):
+        return
+
+    from sklearn.feature_extraction.text import CountVectorizer
+    from spacy.lang.es.stop_words import STOP_WORDS
+
+    model = state["model"]
+    raw_texts = state.get("raw_texts") or []
+    model_topics = getattr(model, "topics_", None)
+    matrix = np.asarray(state.get("doc_topic_matrix"))
+    topic_ids = [int(topic_id) for topic_id in state.get("topic_ids", [])]
+
+    if model_topics is None or len(model_topics) != len(raw_texts):
+        if matrix.ndim != 2 or len(raw_texts) != matrix.shape[0]:
+            raise ValueError(
+                "No se pudieron recuperar las asignaciones existentes de BERTopic."
+            )
+        if len(topic_ids) != matrix.shape[1]:
+            raise ValueError("Los IDs de BERTopic no coinciden con la matriz de temas.")
+        model_topics = [
+            topic_ids[int(column)] for column in matrix.argmax(axis=1)
+        ]
+
+    model.update_topics(
+        raw_texts,
+        topics=[int(topic_id) for topic_id in model_topics],
+        top_n_words=30,
+        vectorizer_model=CountVectorizer(
+            stop_words=sorted(set(STOP_WORDS) | _STOPWORDS_EXTRA),
+        ),
+    )
+    state["_ui_stopwords_applied"] = True
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +321,43 @@ def query_to_topic_vector(query: str, state: dict) -> np.ndarray:
     np.ndarray de shape (n_topics,) con la distribución normalizada de temas.
     Puede ser un vector de ceros si la consulta no contiene términos del vocabulario.
     """
+    if state.get("config", {}).get("method") == "bertopic":
+        ensure_bertopic_stopwords(state)
+        model = state["model"]
+        if not hasattr(model, "approximate_distribution"):
+            raise ValueError(
+                "El modelo BERTopic no permite calcular una distribución aproximada de temas."
+            )
+
+        # BERTopic devuelve una columna por cada tema real y omite el tópico
+        # outlier -1; la matriz guardada sí incluye esa columna.
+        topic_ids = [int(topic_id) for topic_id in state.get("topic_ids", [])]
+        doc_topic_mat = np.asarray(state["doc_topic_matrix"])
+        if len(topic_ids) != doc_topic_mat.shape[1]:
+            raise ValueError("Los IDs de BERTopic no coinciden con la matriz de temas.")
+
+        distribution, _ = model.approximate_distribution(
+            [query], window=4, stride=1
+        )
+        bertopic_vector = np.asarray(distribution)[0]
+        actual_topic_ids = [topic_id for topic_id in topic_ids if topic_id != -1]
+        if bertopic_vector.size != len(actual_topic_ids):
+            raise ValueError(
+                "La distribución BERTopic no coincide con los temas del modelo."
+            )
+
+        topic_columns = {
+            topic_id: column for column, topic_id in enumerate(topic_ids)
+        }
+        query_vector = np.zeros(len(topic_ids), dtype=float)
+        for topic_id, weight in zip(actual_topic_ids, bertopic_vector):
+            query_vector[topic_columns[topic_id]] = weight
+
+        total = query_vector.sum()
+        if total > 0:
+            query_vector /= total
+        return query_vector
+
     processed = preprocess_query(query)
     vectorizer = state["vectorizer"]
     model      = state["model"]

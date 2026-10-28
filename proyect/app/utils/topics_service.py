@@ -37,8 +37,10 @@ def _load_labels(model_path: str) -> dict[int, str]:
     Carga el archivo de etiquetas correspondiente al modelo pkl.
 
     Convención de nombres:
-        pkl  →  Topic_models/lda/100_topics_lda.pkl
-        json →  Topic_results/100_topics_lda_labels.json
+        LDA/NMF pkl → Topic_models/lda/20_topics_lda.pkl
+        LDA/NMF json → Topic_results/lda/20_lda_topics_labels.json
+        BERTopic pkl → Topic_models/bertopic/<stem>.pickle
+        BERTopic json → Topic_results/bertopic/<stem>_labels.json
 
     El JSON contiene una lista de objetos {topic_id (1-based), label, top_words}.
     Si el label comienza por "[ERROR" se trata como sin etiqueta y se devuelve
@@ -48,16 +50,27 @@ def _load_labels(model_path: str) -> dict[int, str]:
     --------
     dict[int, str]  topic_id (1-based) → label  (vacío si no disponible)
     """
-    # Extraer el stem del pkl (ej. "100_topics_lda")
-    stem = Path(model_path).stem          # nombre sin extensión
+    stem = Path(model_path).stem
+    candidates = [RESULTS_ROOT / f"{stem}_labels.json"]
 
-    label_file = RESULTS_ROOT / f"{stem}_labels.json"
-    if not label_file.exists():
+    # Los resultados LDA/NMF usan nombres y subcarpetas distintos al pickle.
+    match = re.fullmatch(r"(\d+)_topics_(lda|nmf)", stem)
+    if match:
+        n_topics, method = match.groups()
+        candidates.insert(
+            0,
+            RESULTS_ROOT / method / f"{n_topics}_{method}_topics_labels.json",
+        )
+    elif "bertopic" in stem.lower():
+        candidates.insert(0, RESULTS_ROOT / "bertopic" / f"{stem}_labels.json")
+
+    label_file = next((candidate for candidate in candidates if candidate.is_file()), None)
+    if label_file is None:
         return {}
 
     try:
         data = json.loads(label_file.read_text(encoding="utf-8"))
-    except Exception:
+    except (OSError, json.JSONDecodeError):
         return {}
 
     labels = {}
@@ -113,32 +126,65 @@ def get_topics(
     FileNotFoundError / ValueError desde load_topic_model() si el path es inválido.
     """
     # Reutilizar la carga y caché del chat_service
-    from app.utils.chat_service import load_topic_model, _stem_to_doc_id
+    from app.utils.chat_service import (
+        load_topic_model,
+        _stem_to_doc_id,
+        ensure_bertopic_stopwords,
+    )
 
     state = load_topic_model(model_path)
 
     # Cargar etiquetas legibles desde Topic_results/<stem>_labels.json
     labels = _load_labels(model_path)   # dict {topic_id_1based: label_str}
 
-    feature_names   = list(state["vectorizer"].get_feature_names_out())
     doc_topic_mat   = np.array(state["doc_topic_matrix"])   # (n_docs, n_topics)
     doc_paths       = [str(p) for p in state["doc_paths"]]
-    n_topics        = state["config"]["n_topics"]
-    components      = state["model"].components_             # (n_topics, n_features)
+    method          = state["config"].get("method", "")
+
+    if method == "bertopic":
+        ensure_bertopic_stopwords(state)
+
+        topic_ids = [
+            int(topic_id)
+            for topic_id in state.get("topic_ids", range(doc_topic_mat.shape[1]))
+        ]
+        if len(topic_ids) != doc_topic_mat.shape[1]:
+            raise ValueError("Los metadatos BERTopic no coinciden con la matriz de temas.")
+        display_topics = [
+            (column_idx, topic_id)
+            for column_idx, topic_id in enumerate(topic_ids)
+            if topic_id != -1
+        ]
+        display_idx_by_column = {
+            column_idx: display_idx
+            for display_idx, (column_idx, _) in enumerate(display_topics)
+        }
+    else:
+        feature_names = list(state["vectorizer"].get_feature_names_out())
+        components = state["model"].components_             # (n_topics, n_features)
+        display_topics = [
+            (idx, idx + 1) for idx in range(state["config"]["n_topics"])
+        ]
+        display_idx_by_column = {idx: idx for idx, _ in display_topics}
+
+    display_topic_ids = dict(display_topics)
 
     topics = []
 
-    for topic_idx in range(n_topics):
+    for display_idx, (column_idx, topic_id) in enumerate(display_topics):
         # ── Palabras más representativas ────────────────────────────────────
-        # components[i] es el vector de pesos del tema i sobre el vocabulario.
-        # Ordenamos descendente y tomamos los primeros n_words índices.
-        comp_vec   = components[topic_idx]
-        top_widx   = comp_vec.argsort()[:-n_words - 1: -1]
-        top_words  = [feature_names[i] for i in top_widx]
+        if method == "bertopic":
+            topic_words = state["model"].get_topic(topic_id) or []
+            top_words = [str(word) for word, _ in topic_words[:n_words]]
+        else:
+            # components[i] es el vector de pesos del tema i sobre el vocabulario.
+            comp_vec = components[column_idx]
+            top_widx = comp_vec.argsort()[:-n_words - 1: -1]
+            top_words = [feature_names[i] for i in top_widx]
 
         # ── Documentos más relevantes para este tema ─────────────────────────
         # Columna topic_idx de la matriz: peso de cada documento en este tema.
-        col_weights = doc_topic_mat[:, topic_idx]
+        col_weights = doc_topic_mat[:, column_idx]
 
         # Número de documentos que superan el umbral min_weight
         doc_count = int((col_weights >= min_weight).sum())
@@ -165,9 +211,17 @@ def get_topics(
             threshold_w = multi_topic_ratio * max_w
 
             other_topics = [
-                {"idx": int(t), "weight": round(float(doc_weights[t]), 4)}
-                for t in np.where(doc_weights >= threshold_w)[0]
-                if int(t) != topic_idx
+                {
+                    "idx": display_idx_by_column[int(t)],
+                    "topic_id": display_topic_ids[int(t)],
+                    "label": labels.get(
+                        display_topic_ids[int(t)],
+                        labels.get(display_idx_by_column[int(t)] + 1, ""),
+                    ),
+                    "weight": round(float(doc_weights[t]), 4),
+                }
+                for t in np.nonzero(doc_weights >= threshold_w)[0]
+                if int(t) != column_idx and int(t) in display_idx_by_column
             ]
             # Limitar a los 3 más fuertes para no saturar la UI
             other_topics.sort(key=lambda x: x["weight"], reverse=True)
@@ -181,10 +235,11 @@ def get_topics(
             })
 
         # Etiqueta legible (topic_id en el JSON es 1-based = topic_idx + 1)
-        label = labels.get(topic_idx + 1, "")
+        label = labels.get(topic_id, labels.get(display_idx + 1, ""))
 
         topics.append({
-            "idx":       topic_idx,
+            "idx":       display_idx,
+            "topic_id":  topic_id,
             "label":     label,          # cadena vacía si no hay etiqueta disponible
             "words":     top_words,
             "doc_count": doc_count,
